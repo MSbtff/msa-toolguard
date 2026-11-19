@@ -10,7 +10,6 @@ allprojects {
 subprojects {
     apply plugin: 'java-library'
     apply plugin: 'jacoco'
-    apply plugin: 'maven-publish'
 
     java {
         toolchain {
@@ -71,19 +70,22 @@ subprojects {
         dependsOn tasks.named('integrationTest')
     }
 
-    publishing {
-        publications {
-            mavenJava(MavenPublication) {
-                from components.java
+    if (project.name.startsWith('toolguard-')) {
+        apply plugin: 'maven-publish'
+        publishing {
+            publications {
+                mavenJava(MavenPublication) {
+                    from components.java
+                }
             }
-        }
-        repositories {
-            maven {
-                name = 'GitHubPackages'
-                url = uri('https://maven.pkg.github.com/MSbtff/msa-toolguard')
-                credentials {
-                    username = System.getenv('GITHUB_ACTOR') ?: findProperty('gpr.user') ?: ''
-                    password = System.getenv('GITHUB_TOKEN') ?: findProperty('gpr.key') ?: ''
+            repositories {
+                maven {
+                    name = 'GitHubPackages'
+                    url = uri('https://maven.pkg.github.com/MSbtff/msa-toolguard')
+                    credentials {
+                        username = System.getenv('GITHUB_ACTOR') ?: findProperty('gpr.user') ?: ''
+                        password = System.getenv('GITHUB_TOKEN') ?: findProperty('gpr.key') ?: ''
+                    }
                 }
             }
         }

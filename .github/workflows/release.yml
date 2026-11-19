@@ -1,0 +1,56 @@
+name: Release & Publish Packages
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Extract release version
+        id: meta
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Run Java and Python verification suites
+        run: |
+          ./gradlew -PreleaseVersion=${{ steps.meta.outputs.version }} check --stacktrace
+          PYTHONPATH=python/src python3 -m unittest discover -s python/tests -v
+          python3 -m unittest discover -s .agents/hooks -p 'test_*.py' -v
+      - name: Publish immutable artifacts to GitHub Packages
+        env:
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./gradlew -PreleaseVersion=${{ steps.meta.outputs.version }} publish --stacktrace
+      - name: Create or update GitHub Release with JAR artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          TAG="${GITHUB_REF_NAME}"
+          ASSETS=(
+            "toolguard-core/build/libs/toolguard-core-${VERSION}.jar"
+            "toolguard-core/build/libs/toolguard-core-${VERSION}-sources.jar"
+            "toolguard-spring-boot-starter/build/libs/toolguard-spring-boot-starter-${VERSION}.jar"
+            "toolguard-spring-boot-starter/build/libs/toolguard-spring-boot-starter-${VERSION}-sources.jar"
+            "toolguard-test-fixtures/build/libs/toolguard-test-fixtures-${VERSION}.jar"
+            "toolguard-test-fixtures/build/libs/toolguard-test-fixtures-${VERSION}-sources.jar"
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+          else
+            gh release create "$TAG" "${ASSETS[@]}" --title "${TAG}" --generate-notes
+          fi

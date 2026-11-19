@@ -18,9 +18,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Run Java unit and Testcontainers integration tests
+      - name: Run Java unit, sample, and Testcontainers integration tests
         run: ./gradlew check --stacktrace
       - name: Verify local Maven publication
         run: ./gradlew publishToMavenLocal
       - name: Run Python MCP/A2A Harness SDK tests
         run: PYTHONPATH=python/src python3 -m unittest discover -s python/tests -v
+      - name: Run lifecycle hook tests
+        run: python3 -m unittest discover -s .agents/hooks -p 'test_*.py' -v

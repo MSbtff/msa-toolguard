@@ -23,29 +23,39 @@ Java 21 / Spring Boot 4 백엔드와 Python MCP/A2A 에이전트에서 AI 도구
 | `toolguard-core` | 정책·예산·스코프·근거 원장·출력 검증·`VerifiedAgentRunner`·`AuditLogFormatter`·멱등 실행 코어 | 순수 Java 21 (외부 런타임 의존성 없음) |
 | `toolguard-spring-boot-starter` | Spring Boot 4 AutoConfiguration, `@GuardedTool`, `JdbcToolExecutionStore`, `RedisToolExecutionStore`, SLF4J 감사 로그, Micrometer 메트릭 | Spring Boot 4.1+, JDBC/Redis/Micrometer (optional) |
 | `toolguard-test-fixtures` | Record/Replay(VCR) 하네스 및 정책·근거 검증 JUnit 5 단언 유틸 | JUnit 5 |
+| `samples` | ErpMSA·LLM 없이 단독 실행 가능한 가드레일·자가수정·감사로그 데모 | `toolguard-core`, `toolguard-test-fixtures` |
 | `python/` | Phase 2 Python MCP/A2A Harness SDK (`msa_toolguard`) | 순수 Python 3.10+ 표준 라이브러리 |
 | `contracts/` | Java와 Python SDK가 공유하는 언어 중립 JSON Schema 계약 | 언어 중립 |
+| `.agents/hooks/` | `toolguard-core` 순수성·시크릿 차단(`PreToolUse`) 및 `contracts/` 계약 검증(`Stop`) 훅 | 순수 Python 3 |
 
 ## 빠른 빌드 및 로컬 배포
 
 ```bash
 ./gradlew unitTest
-./gradlew check                 # 단위 테스트 + PostgreSQL/Redis Testcontainers 통합 테스트
+./gradlew check                 # 단위 테스트 + samples + PostgreSQL/Redis Testcontainers 통합 테스트
 ./gradlew publishToMavenLocal   # 0.1.0-SNAPSHOT 로컬 Maven 배포
 PYTHONPATH=python/src python3 -m unittest discover -s python/tests -v
+python3 -m unittest discover -s .agents/hooks -p 'test_*.py' -v
 ```
 
-로컬 Maven 배포 후 Spring Boot 프로젝트에서 아래처럼 의존성을 추가합니다.
+로컬 개발 중에는 `mavenLocal()`로, Docker/CI 환경에서는 `v*` 태그로 자동 배포되는 **GitHub Packages**의 불변 버전을 참조합니다.
 
 ```groovy
 repositories {
     mavenLocal()
+    maven {
+        url = uri('https://maven.pkg.github.com/MSbtff/msa-toolguard')
+        credentials {
+            username = System.getenv('GITHUB_ACTOR') ?: findProperty('gpr.user')
+            password = System.getenv('GITHUB_TOKEN') ?: findProperty('gpr.key')
+        }
+    }
     mavenCentral()
 }
 
 dependencies {
-    implementation 'io.github.msbtff:toolguard-spring-boot-starter:0.1.0-SNAPSHOT'
-    testImplementation 'io.github.msbtff:toolguard-test-fixtures:0.1.0-SNAPSHOT'
+    implementation 'io.github.msbtff:toolguard-spring-boot-starter:0.1.2'
+    testImplementation 'io.github.msbtff:toolguard-test-fixtures:0.1.2'
 }
 ```
 

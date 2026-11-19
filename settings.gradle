@@ -3,5 +3,6 @@ rootProject.name = 'msa-toolguard'
 include(
     'toolguard-core',
     'toolguard-spring-boot-starter',
-    'toolguard-test-fixtures'
+    'toolguard-test-fixtures',
+    'samples'
 )
