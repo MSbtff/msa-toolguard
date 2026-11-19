@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/goldenpage/msa-toolguard/contracts/tool-policy-v1.schema.json",
+  "title": "ToolPolicyV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["name", "accessLevel", "maxCalls"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_.-]*$"
+    },
+    "accessLevel": {
+      "type": "string",
+      "enum": ["READ_ONLY", "MUTATING"]
+    },
+    "maxCalls": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "requires": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "boundParameters": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "requireIdempotencyKey": {
+      "type": "boolean"
+    },
+    "evidencePrefix": {
+      "type": "string",
+      "pattern": "^[A-Z]{1,4}$"
+    }
+  }
+}

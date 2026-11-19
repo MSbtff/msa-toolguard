@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/goldenpage/msa-toolguard/contracts/evidence-record-v1.schema.json",
+  "title": "EvidenceRecordV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["evidenceId", "toolName", "status", "recordedAt", "digest", "facts"],
+  "properties": {
+    "evidenceId": {
+      "type": "string",
+      "pattern": "^[A-Z]{1,4}[1-9][0-9]*$"
+    },
+    "toolName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["PENDING", "COMPLETED", "REJECTED"]
+    },
+    "requestId": {
+      "type": ["string", "null"]
+    },
+    "recordedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "facts": {
+      "type": "object"
+    }
+  }
+}

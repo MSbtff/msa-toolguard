@@ -1,0 +1,12 @@
+package io.github.goldenpage.toolguard.core;
+
+public enum ViolationCode {
+    UNREGISTERED_TOOL,
+    ACCESS_DENIED,
+    CALL_BUDGET_EXCEEDED,
+    PREREQUISITE_NOT_MET,
+    SCOPE_VIOLATION,
+    POLICY_DENIED,
+    MISSING_IDEMPOTENCY_KEY,
+    IDEMPOTENCY_CONFLICT
+}

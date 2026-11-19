@@ -1,0 +1,91 @@
+allprojects {
+    group = 'io.github.goldenpage'
+    version = '0.1.0-SNAPSHOT'
+
+    repositories {
+        mavenCentral()
+    }
+}
+
+subprojects {
+    apply plugin: 'java-library'
+    apply plugin: 'jacoco'
+    apply plugin: 'maven-publish'
+
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(21)
+        }
+        withSourcesJar()
+    }
+
+    jacoco {
+        toolVersion = '0.8.16'
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+        options.compilerArgs.add('-parameters')
+    }
+
+    tasks.named('test') {
+        description = 'Runs isolated unit tests (JUnit tag: unit).'
+        useJUnitPlatform {
+            includeTags 'unit'
+        }
+        failOnNoDiscoveredTests = false
+        finalizedBy tasks.named('jacocoTestReport')
+    }
+
+    tasks.register('unitTest') {
+        group = 'verification'
+        description = 'Alias for test: unit tests only, with JaCoCo report.'
+        dependsOn tasks.named('test')
+    }
+
+    tasks.register('integrationTest', Test) {
+        group = 'verification'
+        description = 'Runs Spring context and integration tests (tag: integration).'
+        testClassesDirs = sourceSets.test.output.classesDirs
+        classpath = sourceSets.test.runtimeClasspath
+        useJUnitPlatform {
+            includeTags 'integration'
+        }
+        failOnNoDiscoveredTests = false
+        shouldRunAfter tasks.named('test')
+        jacoco {
+            enabled = false
+        }
+    }
+
+    tasks.named('jacocoTestReport') {
+        dependsOn tasks.named('test')
+        reports {
+            xml.required = true
+            html.required = true
+            csv.required = false
+        }
+    }
+
+    tasks.named('check') {
+        dependsOn tasks.named('integrationTest')
+    }
+
+    publishing {
+        publications {
+            mavenJava(MavenPublication) {
+                from components.java
+            }
+        }
+        repositories {
+            maven {
+                name = 'GitHubPackages'
+                url = uri('https://maven.pkg.github.com/goldenpage/msa-toolguard')
+                credentials {
+                    username = System.getenv('GITHUB_ACTOR') ?: findProperty('gpr.user') ?: ''
+                    password = System.getenv('GITHUB_TOKEN') ?: findProperty('gpr.key') ?: ''
+                }
+            }
+        }
+    }
+}

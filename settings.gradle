@@ -1,0 +1,7 @@
+rootProject.name = 'msa-toolguard'
+
+include(
+    'toolguard-core',
+    'toolguard-spring-boot-starter',
+    'toolguard-test-fixtures'
+)
