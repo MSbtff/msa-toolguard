@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/MSbtff/msa-toolguard/contracts/audit-event-v1.schema.json",
+  "title": "AuditEventV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["timestamp", "sessionId", "toolName", "allowed", "replayed", "elapsedMs"],
+  "properties": {
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "toolName": {
+      "type": "string"
+    },
+    "allowed": {
+      "type": "boolean"
+    },
+    "violationCode": {
+      "type": ["string", "null"],
+      "enum": [
+        "UNREGISTERED_TOOL",
+        "ACCESS_DENIED",
+        "CALL_BUDGET_EXCEEDED",
+        "PREREQUISITE_NOT_MET",
+        "SCOPE_VIOLATION",
+        "POLICY_DENIED",
+        "MISSING_IDEMPOTENCY_KEY",
+        "IDEMPOTENCY_CONFLICT",
+        null
+      ]
+    },
+    "status": {
+      "type": ["string", "null"],
+      "enum": ["PENDING", "COMPLETED", "REJECTED", null]
+    },
+    "replayed": {
+      "type": "boolean"
+    },
+    "elapsedMs": {
+      "type": "number",
+      "minimum": 0
+    }
+  }
+}

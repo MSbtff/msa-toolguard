@@ -3,8 +3,16 @@ dependencies {
     api platform('org.springframework.boot:spring-boot-dependencies:4.1.0')
     api 'org.springframework.boot:spring-boot-autoconfigure'
     compileOnly 'io.micrometer:micrometer-core'
+    compileOnly 'org.slf4j:slf4j-api'
+    compileOnly 'org.springframework.data:spring-data-redis'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.boot:spring-boot-starter-jdbc'
+    testImplementation 'org.springframework.boot:spring-boot-starter-data-redis'
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-postgresql'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
     testImplementation 'io.micrometer:micrometer-core'
+    testRuntimeOnly 'org.postgresql:postgresql'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

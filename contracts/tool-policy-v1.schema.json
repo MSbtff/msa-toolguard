@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/goldenpage/msa-toolguard/contracts/tool-policy-v1.schema.json",
+  "$id": "https://github.com/MSbtff/msa-toolguard/contracts/tool-policy-v1.schema.json",
   "title": "ToolPolicyV1",
   "type": "object",
   "additionalProperties": false,

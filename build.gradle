@@ -1,6 +1,6 @@
 allprojects {
-    group = 'io.github.goldenpage'
-    version = '0.1.0-SNAPSHOT'
+    group = 'io.github.msbtff'
+    version = findProperty('releaseVersion') ?: '0.1.0-SNAPSHOT'
 
     repositories {
         mavenCentral()
@@ -80,7 +80,7 @@ subprojects {
         repositories {
             maven {
                 name = 'GitHubPackages'
-                url = uri('https://maven.pkg.github.com/goldenpage/msa-toolguard')
+                url = uri('https://maven.pkg.github.com/MSbtff/msa-toolguard')
                 credentials {
                     username = System.getenv('GITHUB_ACTOR') ?: findProperty('gpr.user') ?: ''
                     password = System.getenv('GITHUB_TOKEN') ?: findProperty('gpr.key') ?: ''
