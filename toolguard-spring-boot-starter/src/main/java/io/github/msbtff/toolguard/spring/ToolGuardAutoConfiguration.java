@@ -9,7 +9,6 @@ import io.github.msbtff.toolguard.spring.store.RedisToolExecutionStore;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Clock;
 import javax.sql.DataSource;
-import org.slf4j.Logger;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -25,7 +24,13 @@ import org.springframework.data.redis.core.StringRedisTemplate;
     "org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration",
     "org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration",
     "org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration",
-    "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration"
+    "org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration",
+    "org.springframework.boot.micrometer.metrics.autoconfigure.MetricsAutoConfiguration",
+    "org.springframework.boot.micrometer.metrics.autoconfigure.CompositeMeterRegistryAutoConfiguration",
+    "org.springframework.boot.micrometer.metrics.autoconfigure.export.simple.SimpleMetricsExportAutoConfiguration",
+    "org.springframework.boot.micrometer.metrics.autoconfigure.export.prometheus.PrometheusMetricsExportAutoConfiguration",
+    "org.springframework.boot.actuate.autoconfigure.metrics.MetricsAutoConfiguration",
+    "org.springframework.boot.actuate.autoconfigure.metrics.CompositeMeterRegistryAutoConfiguration"
 })
 @EnableConfigurationProperties(ToolGuardProperties.class)
 @ConditionalOnProperty(prefix = "toolguard", name = "enabled", havingValue = "true", matchIfMissing = true)
@@ -76,7 +81,7 @@ public class ToolGuardAutoConfiguration {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @ConditionalOnClass(StringRedisTemplate.class)
+    @ConditionalOnClass(name = "org.springframework.data.redis.core.StringRedisTemplate")
     @ConditionalOnProperty(prefix = "toolguard.store", name = "type", havingValue = "redis")
     static class RedisStoreConfiguration {
         @Bean
@@ -98,7 +103,7 @@ public class ToolGuardAutoConfiguration {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @ConditionalOnClass(Logger.class)
+    @ConditionalOnClass(name = "org.slf4j.Logger")
     @ConditionalOnProperty(prefix = "toolguard.audit", name = "enabled", havingValue = "true", matchIfMissing = true)
     static class AuditLoggingConfiguration {
         @Bean
@@ -109,7 +114,7 @@ public class ToolGuardAutoConfiguration {
     }
 
     @Configuration(proxyBeanMethods = false)
-    @ConditionalOnClass(MeterRegistry.class)
+    @ConditionalOnClass(name = "io.micrometer.core.instrument.MeterRegistry")
     static class MicrometerConfiguration {
         @Bean
         @ConditionalOnBean(MeterRegistry.class)

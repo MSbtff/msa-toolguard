@@ -2,8 +2,6 @@ package io.github.msbtff.toolguard.spring;
 
 import io.github.msbtff.toolguard.core.AccessLevel;
 import io.github.msbtff.toolguard.core.AuditLogFormatter;
-import io.github.msbtff.toolguard.spring.store.JdbcToolExecutionStore;
-import io.github.msbtff.toolguard.spring.store.RedisToolExecutionStore;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -94,7 +92,7 @@ public class ToolGuardProperties {
     }
 
     public static class JdbcProperties {
-        private String tableName = JdbcToolExecutionStore.DEFAULT_TABLE_NAME;
+        private String tableName = "toolguard_executions";
         private boolean initializeSchema = true;
 
         public String getTableName() {
@@ -115,10 +113,10 @@ public class ToolGuardProperties {
     }
 
     public static class RedisProperties {
-        private String keyPrefix = RedisToolExecutionStore.DEFAULT_KEY_PREFIX;
-        private Duration lockTtl = RedisToolExecutionStore.DEFAULT_LOCK_TTL;
-        private Duration lockAcquireTimeout = RedisToolExecutionStore.DEFAULT_LOCK_ACQUIRE_TIMEOUT;
-        private Duration stateTtl = RedisToolExecutionStore.DEFAULT_STATE_TTL;
+        private String keyPrefix = "toolguard:exec:";
+        private Duration lockTtl = Duration.ofSeconds(30);
+        private Duration lockAcquireTimeout = Duration.ofSeconds(10);
+        private Duration stateTtl = Duration.ofHours(24);
 
         public String getKeyPrefix() {
             return keyPrefix;

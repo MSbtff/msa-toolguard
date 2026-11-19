@@ -77,4 +77,19 @@ class ToolGuardAutoConfigurationTest {
             );
         });
     }
+
+    @Test
+    void loadsCleanlyWhenOptionalRedisAndMicrometerDependenciesAreAbsent() {
+        new ApplicationContextRunner()
+            .withConfiguration(AutoConfigurations.of(ToolGuardAutoConfiguration.class))
+            .withClassLoader(new org.springframework.boot.test.context.FilteredClassLoader(
+                org.springframework.data.redis.core.StringRedisTemplate.class,
+                MeterRegistry.class
+            ))
+            .run(context -> {
+                assertNotNull(context.getBean(ToolSessionFactory.class));
+                assertNotNull(context.getBean(ToolExecutionStore.class));
+                assertNotNull(context.getBean(AuditLogFormatter.class));
+            });
+    }
 }
