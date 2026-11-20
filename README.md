@@ -5,7 +5,7 @@ AI 에이전트(LLM)에게 백엔드 API·DB 호출 권한을 줄 때, AI가 사
 LLM은 확률적으로 동작하기 때문에 프롬프트에 *"조회만 해"*, *"중복 실행하지 마"*, *"없는 말 지어내지 마"*라고 적어두어도 예외 상황이나 프롬프트 인젝션에서 규칙을 어길 수 있습니다.  
 `msa-toolguard`는 **말로 부탁하는 대신, 항상 똑같이 동작하는 코드(`if`문·DB/Redis 락·근거 대조)**로 AI와 백엔드 사이에 안전 경계를 세웁니다.
 
-> **탄생 배경**: **ErpMSA**에서 분산 폐기 멱등성(G4)과 MCP/A2A 기반 폐기 `PENDING` 조사 에이전트를 실전 검증하며 부딪힌 문제(권한 이탈, 중복 쓰기, 환각 보고, 테스트·감사 불가)를 범용 백엔드 라이브러리로 추출했습니다.
+> **탄생 배경**: **MSA** 환경에서 분산 폐기 멱등성(G4)과 MCP/A2A 기반 폐기 `PENDING` 조사 에이전트를 실전 검증하며 부딪힌 문제(권한 이탈, 중복 쓰기, 환각 보고, 테스트·감사 불가)를 범용 백엔드 라이브러리로 추출했습니다.
 
 ---
 
@@ -227,7 +227,7 @@ with LoopbackMcpServer.for_session(session, tools) as server:
 | `toolguard-core` | 정책·예산·스코프·근거 원장·출력 검증·`VerifiedAgentRunner`·`AuditLogFormatter`·멱등 실행 코어 | 순수 Java 21 (외부 런타임 의존성 없음) |
 | `toolguard-spring-boot-starter` | Spring Boot 4 AutoConfiguration, `@GuardedTool`, `JdbcToolExecutionStore`, `RedisToolExecutionStore`, SLF4J 감사 로그, Micrometer 메트릭 | Spring Boot 4.1+, JDBC/Redis/Micrometer (optional) |
 | `toolguard-test-fixtures` | Record/Replay(VCR) 하네스 및 정책·근거 검증 JUnit 5 단언 유틸 | JUnit 5 |
-| `samples` | ErpMSA·LLM 없이 단독 실행 가능한 가드레일·자가수정·감사로그 데모 | `toolguard-core`, `toolguard-test-fixtures` |
+| `samples` | 외부 MSA·LLM 없이 단독 실행 가능한 가드레일·자가수정·감사로그 데모 | `toolguard-core`, `toolguard-test-fixtures` |
 | `python/` | Phase 2 Python MCP/A2A Harness SDK (`msa_toolguard`) | 순수 Python 3.10+ 표준 라이브러리 |
 | `contracts/` | Java와 Python SDK가 공유하는 언어 중립 JSON Schema 계약 | 언어 중립 |
 | `.agents/hooks/` | `toolguard-core` 순수성·시크릿 차단(`PreToolUse`) 및 `contracts/` 계약 검증(`Stop`) 훅 | 순수 Python 3 |
