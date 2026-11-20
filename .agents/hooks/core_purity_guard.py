@@ -41,11 +41,14 @@ DESTRUCTIVE_CMD_PATTERNS = (
         "파괴적 명령 차단: `rm -rf` 강제 재귀 삭제는 금지됩니다.",
     ),
     (
-        re.compile(r"\bgit\b[^\n;]*\bpush\b[^\n;]*(?:\s-f\b|\s--force(?:-with-lease)?\b|\s\+[^\s]+)", re.IGNORECASE),
+        re.compile(r"\bgit\b[^\n;&]*\bpush\b[^\n;&]*(?:\s-f\b|\s--force(?:-with-lease)?\b|\s\+[^\s]+)", re.IGNORECASE),
         "파괴적 Git 명령 차단: force push는 금지됩니다.",
     ),
     (
-        re.compile(r"\bgit\b[^\n;]*\b(?:reset\s+--hard|clean\s+-[a-zA-Z]*f)", re.IGNORECASE),
+        re.compile(
+            r"\bgit\b[^\n;&]*\b(?:reset\b[^\n;&]*\s--hard\b|clean\b[^\n;&]*(?:\s-[a-zA-Z]*f\b|\s--force\b))",
+            re.IGNORECASE,
+        ),
         "파괴적 Git 명령 차단: `git reset --hard` / `git clean -f`는 금지됩니다.",
     ),
     (
@@ -76,16 +79,29 @@ ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 FORBIDDEN_ENV_KEYS = frozenset({"LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH"})
 
 SAFE_GIT_SUBCOMMANDS = frozenset({
-    "status", "diff", "log", "show", "branch", "tag",
-    "add", "commit", "checkout", "switch", "stash",
-    "fetch", "pull", "push", "remote", "rev-parse", "ls-files",
+    # 조회·이력·진단
+    "status", "diff", "log", "show", "reflog", "describe",
+    "rev-parse", "rev-list", "ls-files", "ls-tree", "diff-tree",
+    "cat-file", "blame", "shortlog", "grep", "merge-base", "check-ignore",
+    # 브랜치·태그·작업 트리·원격 동기화
+    "branch", "tag", "add", "commit", "checkout", "switch", "stash",
+    "merge", "rebase", "cherry-pick", "revert", "restore", "reset",
+    "mv", "rm", "config", "worktree",
+    "fetch", "pull", "push", "remote",
 })
-SAFE_GH_PREFIXES = (
-    ("run", "list"), ("run", "view"), ("run", "watch"),
+SAFE_GH_PREFIXES = frozenset({
+    ("run", "list"), ("run", "view"), ("run", "watch"), ("run", "rerun"),
     ("release", "list"), ("release", "view"),
     ("repo", "view"), ("auth", "status"),
     ("pr", "list"), ("pr", "view"), ("pr", "status"),
-)
+    ("pr", "create"), ("pr", "checks"), ("pr", "diff"),
+    ("pr", "edit"), ("pr", "comment"), ("pr", "merge"),
+    ("pr", "checkout"), ("pr", "ready"), ("pr", "close"),
+    ("pr", "reopen"), ("pr", "review"),
+    ("issue", "list"), ("issue", "view"), ("issue", "status"),
+    ("issue", "create"), ("issue", "edit"), ("issue", "comment"),
+    ("issue", "close"), ("issue", "reopen"),
+})
 SAFE_READ_BINS = frozenset({"ls", "find", "grep", "rg", "cat", "head", "tail", "wc", "sort", "pwd", "which", "echo"})
 SAFE_DOCKER_SUBCOMMANDS = frozenset({"info", "ps", "version"})
 
@@ -203,7 +219,13 @@ def is_safe_segment(segment: str) -> bool:
                 sub_idx += 1
         if sub_idx >= len(rest):
             return False
-        return rest[sub_idx] in SAFE_GIT_SUBCOMMANDS
+        subcmd = rest[sub_idx]
+        sub_args = rest[sub_idx + 1:]
+        if subcmd not in SAFE_GIT_SUBCOMMANDS:
+            return False
+        if subcmd == "config" and any(arg in ("--global", "--system") for arg in sub_args):
+            return False
+        return True
 
     if cmd in ("python3", "python", "pytest"):
         # Disallow inline arbitrary code execution for auto-allow; allow unittest/module/test files
