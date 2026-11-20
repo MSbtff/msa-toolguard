@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -48,5 +49,39 @@ class CanonicalJsonTest {
             () -> CanonicalJson.parse(deeplyNested)
         );
         assertTrue(depthError.getMessage().contains("maximum depth"));
+    }
+
+    @Test
+    void stringifySortedHandlesEnumsArraysControlCharsAndExponents() {
+        Map<String, Object> unsorted = new LinkedHashMap<>();
+        unsorted.put("z", AccessLevel.MUTATING);
+        unsorted.put("a", new Object[] { "x", 1, null });
+        unsorted.put("ctrl", "\b\f\r\n\t\u0001");
+
+        String sortedJson = CanonicalJson.stringifySorted(unsorted);
+        assertEquals(
+            "{\"a\":[\"x\",1,null],\"ctrl\":\"\\b\\f\\r\\n\\t\\u0001\",\"z\":\"MUTATING\"}",
+            sortedJson
+        );
+
+        Map<String, Object> parsed = CanonicalJson.parseObject(sortedJson);
+        assertEquals("\b\f\r\n\t\u0001", parsed.get("ctrl"));
+        assertEquals("MUTATING", parsed.get("z"));
+        assertEquals(Arrays.asList("x", 1L, null), parsed.get("a"));
+
+        // Unicode escapes, scientific notation, and negative numbers
+        Map<String, Object> parsedComplex = CanonicalJson.parseObject(
+            "{\"uni\":\"\\u0041\\/B\",\"exp\":1.5e2,\"neg\":-12,\"zero\":0}"
+        );
+        assertEquals("A/B", parsedComplex.get("uni"));
+        assertEquals(150.0, parsedComplex.get("exp"));
+        assertEquals(-12L, parsedComplex.get("neg"));
+        assertEquals(0L, parsedComplex.get("zero"));
+
+        assertThrows(IllegalArgumentException.class, () -> CanonicalJson.parse(null));
+        assertThrows(IllegalArgumentException.class, () -> CanonicalJson.parseObject("[1,2]"));
+        assertThrows(IllegalArgumentException.class, () -> CanonicalJson.stringify(Float.POSITIVE_INFINITY));
+        assertThrows(IllegalArgumentException.class, () -> CanonicalJson.parse("\"\\q\""));
+        assertThrows(IllegalArgumentException.class, () -> CanonicalJson.parse("\"\\u12\""));
     }
 }

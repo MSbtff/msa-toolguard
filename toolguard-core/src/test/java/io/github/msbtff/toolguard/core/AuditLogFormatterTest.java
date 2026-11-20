@@ -83,4 +83,56 @@ class AuditLogFormatterTest {
         assertTrue(markdown.contains("PASSED"));
         assertFalse(markdown.contains("super-secret-jwt"));
     }
+
+    @Test
+    void coversDefaultAuditTrailListenerToJsonLinesAndFailedVerificationMarkdown() {
+        AuditLogFormatter customFormatter = new AuditLogFormatter(List.of("custom_secret"));
+        assertTrue(customFormatter.redactedKeys().contains("custom_secret"));
+
+        AuditTrailListener defaultListener = new AuditTrailListener();
+        ToolSession session = ToolSession.builder()
+            .sessionId("sess-audit-2")
+            .maxAccessLevel(AccessLevel.MUTATING)
+            .addListener(defaultListener)
+            .registerTool(
+                ToolPolicy.builder("uncertain_tool").accessLevel(AccessLevel.MUTATING).build(),
+                args -> {
+                    throw new UncertainExecutionException("network drop", new RuntimeException("io error"));
+                }
+            )
+            .build();
+
+        ToolExecutionOutcome pending = session.execute("uncertain_tool", Map.of(), "req-uncertain");
+        assertEquals(ToolExecutionStatus.PENDING, pending.status());
+
+        List<String> jsonLines = defaultListener.toJsonLines();
+        assertEquals(1, jsonLines.size());
+        Map<String, Object> parsed = CanonicalJson.parseObject(jsonLines.getFirst());
+        assertEquals("PENDING", parsed.get("status"));
+
+        VerificationResult failed = VerificationResult.fail(List.of(
+            new VerificationFailure("STATUS_MISMATCH", "Pipe | and `tick`", "Retry after checking `ledger`")
+        ));
+        String sessionJson = defaultListener.toSessionJson(session.sessionId(), session.evidenceLedger(), failed);
+        assertTrue(sessionJson.contains("\"verified\":false"));
+        assertTrue(sessionJson.contains("STATUS_MISMATCH"));
+
+        String markdown = defaultListener.toMarkdown(session.sessionId(), session.evidenceLedger(), failed);
+        assertTrue(markdown.contains("FAILED"));
+        assertTrue(markdown.contains("STATUS_MISMATCH"));
+
+        // Verify array redaction inside nested facts
+        EvidenceLedger ledger = new EvidenceLedger();
+        EvidenceRecord record = ledger.record(
+            "E",
+            "tool_a",
+            ToolExecutionStatus.COMPLETED,
+            null,
+            Map.of("items", List.of(Map.of("custom_secret", "top-secret", "visible", "ok")))
+        );
+        String redactedEvidence = customFormatter.formatEvidenceJson(record);
+        assertFalse(redactedEvidence.contains("top-secret"));
+        assertTrue(redactedEvidence.contains("[REDACTED]"));
+        assertTrue(redactedEvidence.contains("ok"));
+    }
 }

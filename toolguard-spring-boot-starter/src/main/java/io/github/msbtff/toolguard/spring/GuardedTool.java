@@ -19,7 +19,22 @@ public @interface GuardedTool {
 
     String[] boundParameters() default {};
 
+    /**
+     * Convenience flag to force idempotency key enforcement. For explicit override (including disabling on MUTATING),
+     * prefer {@link #idempotency()}.
+     */
     boolean requireIdempotencyKey() default false;
 
+    IdempotencyMode idempotency() default IdempotencyMode.AUTO;
+
     String evidencePrefix() default "E";
+
+    /** Case-insensitive parameter names forbidden by policy. */
+    String[] forbidKeys() default {};
+
+    /**
+     * Allowlist of parameter names permitted by policy. Host-bound parameters listed in {@link #boundParameters()}
+     * are automatically included when this allowlist is non-empty.
+     */
+    String[] allowedKeys() default {};
 }
