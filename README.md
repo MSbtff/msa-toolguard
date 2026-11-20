@@ -5,7 +5,7 @@ Java 21 / Spring Boot 4 백엔드와 Python MCP/A2A 에이전트에서 AI 도구
 ## 왜 만들었는가
 
 대규모 코딩/운영 에이전트 환경에서 자연어 지침("이 도구는 수정하지 마", "근거 없이 결론 내지 마")만으로는 안전 경계를 보장할 수 없습니다.  
-`msa-toolguard`는 **ErpMSA**의 분산 폐기 멱등성(G4)과 MCP/A2A 기반 폐기 `PENDING` 조사 에이전트 실전 검증 경험을 범용 백엔드 라이브러리로 추상화했습니다.
+`msa-toolguard`는 **MSA**의 분산 폐기 멱등성(G4)과 MCP/A2A 기반 폐기 `PENDING` 조사 에이전트 실전 검증 경험을 범용 백엔드 라이브러리로 추상화했습니다.
 
 - **Tool Guardrail & Policy Engine**: `READ_ONLY`/`MUTATING` 등급, 호출 예산(`maxCalls`), 선행 도구 순서(`requires`), 파라미터 스코프 고정(`boundParameters`), `DenyRule` 사전 차단
 - **Evidence Ledger, Output Verifier & Auto-Repair (`VerifiedAgentRunner`)**: 도구 실행마다 불변 근거(`E1..En`)를 자동 기록하고, LLM 최종 구조화 출력을 실제 근거와 교차 검증하며 불일치 시 구조화된 수정 힌트를 되돌려 제한된 횟수 안에서 자가 수정을 수행
