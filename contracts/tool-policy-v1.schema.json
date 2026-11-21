@@ -35,6 +35,13 @@
     "evidencePrefix": {
       "type": "string",
       "pattern": "^[A-Z]{1,4}$"
+    },
+    "requireApproval": {
+      "type": "boolean"
+    },
+    "executionTimeoutMs": {
+      "type": ["integer", "null"],
+      "minimum": 1
     }
   }
 }

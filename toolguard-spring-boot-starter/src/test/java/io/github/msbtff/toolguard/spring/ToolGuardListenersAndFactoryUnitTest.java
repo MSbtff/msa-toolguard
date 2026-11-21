@@ -36,6 +36,7 @@ class ToolGuardListenersAndFactoryUnitTest {
         properties.setEnabled(true);
         properties.setDefaultAccessLevel(AccessLevel.READ_ONLY);
         properties.setDefaultMaxTotalCalls(3);
+        properties.setDefaultSessionTimeout(Duration.ofSeconds(30));
         properties.getStore().setType(ToolGuardProperties.StoreType.IN_MEMORY);
         properties.getStore().getJdbc().setTableName("custom_execs");
         properties.getStore().getJdbc().setInitializeSchema(false);
@@ -47,6 +48,7 @@ class ToolGuardListenersAndFactoryUnitTest {
         properties.getAudit().setRedactKeys(List.of("secret", "token"));
 
         assertTrue(properties.isEnabled());
+        assertEquals(Duration.ofSeconds(30), properties.getDefaultSessionTimeout());
         assertEquals("custom_execs", properties.getStore().getJdbc().getTableName());
         assertFalse(properties.getStore().getJdbc().isInitializeSchema());
         assertEquals("tg:test:", properties.getStore().getRedis().getKeyPrefix());

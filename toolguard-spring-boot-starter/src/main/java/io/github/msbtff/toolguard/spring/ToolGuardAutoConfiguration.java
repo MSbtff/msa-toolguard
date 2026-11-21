@@ -1,5 +1,6 @@
 package io.github.msbtff.toolguard.spring;
 
+import io.github.msbtff.toolguard.core.ApprovalGate;
 import io.github.msbtff.toolguard.core.AuditLogFormatter;
 import io.github.msbtff.toolguard.core.InMemoryToolExecutionStore;
 import io.github.msbtff.toolguard.core.ToolExecutionListener;
@@ -47,9 +48,15 @@ public class ToolGuardAutoConfiguration {
     public ToolSessionFactory toolSessionFactory(
         ToolGuardProperties properties,
         ToolExecutionStore executionStore,
-        ObjectProvider<ToolExecutionListener> listeners
+        ObjectProvider<ToolExecutionListener> listeners,
+        ObjectProvider<ApprovalGate> approvalGate
     ) {
-        return new ToolSessionFactory(properties, executionStore, listeners.orderedStream().toList());
+        return new ToolSessionFactory(
+            properties,
+            executionStore,
+            listeners.orderedStream().toList(),
+            approvalGate.getIfAvailable(() -> ApprovalGate.DENY_ALL)
+        );
     }
 
     @Configuration(proxyBeanMethods = false)

@@ -6,11 +6,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.msbtff.toolguard.core.AccessLevel;
 import io.github.msbtff.toolguard.core.GuardrailException;
+import io.github.msbtff.toolguard.core.InMemoryApprovalGate;
 import io.github.msbtff.toolguard.core.ToolExecutionOutcome;
 import io.github.msbtff.toolguard.core.ToolExecutionStatus;
 import io.github.msbtff.toolguard.core.ToolSession;
 import io.github.msbtff.toolguard.core.ViolationCode;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Map;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -63,6 +65,31 @@ class AnnotatedToolBinderUnitTest {
         @GuardedTool(name = "throws_checked", maxCalls = 1)
         public ToolExecutionOutcome throwsChecked(Map<String, Object> args) throws IOException {
             throw new IOException("io failure");
+        }
+
+        @GuardedTool(
+            name = "approved_slow_write",
+            accessLevel = AccessLevel.MUTATING,
+            maxCalls = 3,
+            requireApproval = true,
+            timeoutMs = 80
+        )
+        public ToolExecutionOutcome approvedSlowWrite(Map<String, Object> args) {
+            if (Boolean.TRUE.equals(args.get("hang"))) {
+                try {
+                    Thread.sleep(1000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            return ToolExecutionOutcome.completed(Map.of("ok", true));
+        }
+    }
+
+    static class NegativeTimeoutTool {
+        @GuardedTool(name = "neg_timeout", timeoutMs = -5)
+        public ToolExecutionOutcome negTimeout(Map<String, Object> args) {
+            return ToolExecutionOutcome.completed(Map.of());
         }
     }
 
@@ -152,5 +179,28 @@ class AnnotatedToolBinderUnitTest {
             IllegalArgumentException.class,
             () -> AnnotatedToolBinder.registerAll(ToolSession.builder(), new ConflictingIdempotencyTool())
         );
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> AnnotatedToolBinder.registerAll(ToolSession.builder(), new NegativeTimeoutTool())
+        );
+
+        // Verify @GuardedTool(requireApproval=true, timeoutMs=80)
+        InMemoryApprovalGate gate = new InMemoryApprovalGate();
+        ToolSession.Builder approvalBuilder = ToolSession.builder()
+            .scopeKey("acct-ann")
+            .maxAccessLevel(AccessLevel.MUTATING)
+            .approvalGate(gate);
+        AnnotatedToolBinder.registerAll(approvalBuilder, new DeclarativeTools());
+        ToolSession approvalSession = approvalBuilder.build();
+
+        GuardrailException unapproved = assertThrows(
+            GuardrailException.class,
+            () -> approvalSession.execute("approved_slow_write", Map.of("hang", true), "req-ann-1")
+        );
+        assertEquals(ViolationCode.APPROVAL_REQUIRED, unapproved.violation().code());
+
+        gate.grant("acct-ann", "approved_slow_write", Map.of("hang", true), "ops", Duration.ofMinutes(1));
+        ToolExecutionOutcome pendingTimeout = approvalSession.execute("approved_slow_write", Map.of("hang", true), "req-ann-1");
+        assertEquals(ToolExecutionStatus.PENDING, pendingTimeout.status());
     }
 }

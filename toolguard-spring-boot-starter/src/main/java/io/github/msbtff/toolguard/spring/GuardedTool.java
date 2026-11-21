@@ -37,4 +37,13 @@ public @interface GuardedTool {
      * are automatically included when this allowlist is non-empty.
      */
     String[] allowedKeys() default {};
+
+    /** Requires explicit Human-in-the-Loop approval via the session's {@code ApprovalGate} before execution. */
+    boolean requireApproval() default false;
+
+    /**
+     * Maximum per-invocation execution timeout in milliseconds ({@code 0} disables per-tool timeout).
+     * Exceeding this timeout cancels execution and persists/records a {@code PENDING} outcome.
+     */
+    long timeoutMs() default 0;
 }

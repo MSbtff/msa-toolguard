@@ -1,5 +1,6 @@
 package io.github.msbtff.toolguard.core;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -18,7 +19,10 @@ public record ToolPolicy(
     Set<String> boundParameters,
     boolean requireIdempotencyKey,
     String evidencePrefix,
-    List<DenyRule> denyRules
+    List<DenyRule> denyRules,
+    boolean requireApproval,
+    ApprovalPredicate approvalPredicate,
+    Duration executionTimeout
 ) {
     private static final Pattern TOOL_NAME_PATTERN = Pattern.compile("^[a-z][a-z0-9_.-]*$");
     private static final Pattern EVIDENCE_PREFIX_PATTERN = Pattern.compile("^[A-Z]{1,4}$");
@@ -42,6 +46,42 @@ public record ToolPolicy(
             );
         }
         denyRules = denyRules == null ? List.of() : List.copyOf(denyRules);
+        if (executionTimeout != null && executionTimeout.toMillis() < 1) {
+            throw new IllegalArgumentException("executionTimeout must be >= 1ms");
+        }
+    }
+
+    /**
+     * Backwards-compatible 8-argument constructor defaulting approval to false and executionTimeout to null.
+     */
+    public ToolPolicy(
+        String name,
+        AccessLevel accessLevel,
+        int maxCalls,
+        Set<String> requires,
+        Set<String> boundParameters,
+        boolean requireIdempotencyKey,
+        String evidencePrefix,
+        List<DenyRule> denyRules
+    ) {
+        this(
+            name,
+            accessLevel,
+            maxCalls,
+            requires,
+            boundParameters,
+            requireIdempotencyKey,
+            evidencePrefix,
+            denyRules,
+            false,
+            null,
+            null
+        );
+    }
+
+    public boolean requiresApprovalFor(Map<String, Object> resolvedArguments) {
+        return requireApproval
+            || (approvalPredicate != null && approvalPredicate.requiresApproval(name, resolvedArguments));
     }
 
     public static Builder builder(String name) {
@@ -60,6 +100,8 @@ public record ToolPolicy(
         map.put("boundParameters", List.copyOf(boundParameters));
         map.put("requireIdempotencyKey", requireIdempotencyKey);
         map.put("evidencePrefix", evidencePrefix);
+        map.put("requireApproval", requireApproval);
+        map.put("executionTimeoutMs", executionTimeout == null ? null : executionTimeout.toMillis());
         return Collections.unmodifiableMap(map);
     }
 
@@ -80,17 +122,11 @@ public record ToolPolicy(
         int maxCalls = requirePositiveInt(payload, "maxCalls");
         Set<String> requires = optionalStringSet(payload, "requires");
         Set<String> boundParameters = optionalStringSet(payload, "boundParameters");
-        Object rawIdempotency = payload.get("requireIdempotencyKey");
-        boolean requireIdempotencyKey;
-        if (rawIdempotency == null) {
-            requireIdempotencyKey = level == AccessLevel.MUTATING;
-        } else if (rawIdempotency instanceof Boolean bool) {
-            requireIdempotencyKey = bool;
-        } else {
-            throw new IllegalArgumentException("Field 'requireIdempotencyKey' must be a boolean");
-        }
+        boolean requireIdempotencyKey = optionalBoolean(payload, "requireIdempotencyKey", level == AccessLevel.MUTATING);
         Object rawPrefix = payload.get("evidencePrefix");
         String prefix = rawPrefix == null ? "E" : String.valueOf(rawPrefix);
+        boolean requireApproval = optionalBoolean(payload, "requireApproval", false);
+        Duration executionTimeout = optionalPositiveDurationMs(payload, "executionTimeoutMs");
         return new ToolPolicy(
             name,
             level,
@@ -99,7 +135,10 @@ public record ToolPolicy(
             boundParameters,
             requireIdempotencyKey,
             prefix,
-            List.of()
+            List.of(),
+            requireApproval,
+            null,
+            executionTimeout
         );
     }
 
@@ -144,6 +183,32 @@ public record ToolPolicy(
         return (int) longValue;
     }
 
+    private static boolean optionalBoolean(Map<String, Object> payload, String key, boolean defaultValue) {
+        Object value = payload.get(key);
+        if (value == null) {
+            return defaultValue;
+        }
+        if (value instanceof Boolean bool) {
+            return bool;
+        }
+        throw new IllegalArgumentException("Field '" + key + "' must be a boolean");
+    }
+
+    private static Duration optionalPositiveDurationMs(Map<String, Object> payload, String key) {
+        Object value = payload.get(key);
+        if (value == null) {
+            return null;
+        }
+        if (!(value instanceof Number number) || value instanceof Double || value instanceof Float) {
+            throw new IllegalArgumentException("Field '" + key + "' must be an integer");
+        }
+        long millis = number.longValue();
+        if (millis < 1) {
+            throw new IllegalArgumentException("Field '" + key + "' must be >= 1");
+        }
+        return Duration.ofMillis(millis);
+    }
+
     private static Set<String> optionalStringSet(Map<String, Object> payload, String key) {
         Object value = payload.get(key);
         if (value == null) {
@@ -171,6 +236,9 @@ public record ToolPolicy(
         private Boolean requireIdempotencyKey;
         private String evidencePrefix = "E";
         private final List<DenyRule> denyRules = new ArrayList<>();
+        private boolean requireApproval;
+        private ApprovalPredicate approvalPredicate;
+        private Duration executionTimeout;
 
         private Builder(String name) {
             this.name = name;
@@ -215,6 +283,24 @@ public record ToolPolicy(
             return this;
         }
 
+        public Builder requireApproval(boolean required) {
+            this.requireApproval = required;
+            return this;
+        }
+
+        public Builder requireApprovalWhen(ApprovalPredicate predicate) {
+            this.approvalPredicate = Objects.requireNonNull(predicate, "predicate");
+            return this;
+        }
+
+        public Builder executionTimeout(Duration timeout) {
+            if (timeout != null && timeout.toMillis() < 1) {
+                throw new IllegalArgumentException("executionTimeout must be >= 1ms");
+            }
+            this.executionTimeout = timeout;
+            return this;
+        }
+
         public ToolPolicy build() {
             boolean effectiveRequireIdempotency = requireIdempotencyKey != null
                 ? requireIdempotencyKey
@@ -227,7 +313,10 @@ public record ToolPolicy(
                 boundParameters,
                 effectiveRequireIdempotency,
                 evidencePrefix,
-                denyRules
+                denyRules,
+                requireApproval,
+                approvalPredicate,
+                executionTimeout
             );
         }
     }

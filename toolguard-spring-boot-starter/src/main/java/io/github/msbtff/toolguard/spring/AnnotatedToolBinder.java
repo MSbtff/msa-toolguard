@@ -7,6 +7,7 @@ import io.github.msbtff.toolguard.core.ToolPolicy;
 import io.github.msbtff.toolguard.core.ToolSession;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -41,12 +42,22 @@ public final class AnnotatedToolBinder {
                     "Conflicting @GuardedTool idempotency settings (DISABLED and requireIdempotencyKey=true): " + method
                 );
             }
+            if (annotation.timeoutMs() < 0) {
+                throw new IllegalArgumentException(
+                    "@GuardedTool timeoutMs must be >= 0: " + method
+                );
+            }
             ToolPolicy.Builder policyBuilder = ToolPolicy.builder(annotation.name())
                 .accessLevel(annotation.accessLevel())
                 .maxCalls(annotation.maxCalls())
                 .requires(annotation.requires())
                 .boundParameters(annotation.boundParameters())
-                .evidencePrefix(annotation.evidencePrefix());
+                .evidencePrefix(annotation.evidencePrefix())
+                .requireApproval(annotation.requireApproval());
+
+            if (annotation.timeoutMs() > 0) {
+                policyBuilder.executionTimeout(Duration.ofMillis(annotation.timeoutMs()));
+            }
 
             if (annotation.idempotency() == IdempotencyMode.REQUIRED || annotation.requireIdempotencyKey()) {
                 policyBuilder.requireIdempotencyKey(true);

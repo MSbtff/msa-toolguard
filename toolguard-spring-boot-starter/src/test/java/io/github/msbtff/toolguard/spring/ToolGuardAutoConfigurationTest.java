@@ -5,15 +5,20 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import io.github.msbtff.toolguard.core.AccessLevel;
+import io.github.msbtff.toolguard.core.ApprovalGate;
 import io.github.msbtff.toolguard.core.AuditLogFormatter;
 import io.github.msbtff.toolguard.core.GuardrailException;
+import io.github.msbtff.toolguard.core.InMemoryApprovalGate;
 import io.github.msbtff.toolguard.core.InMemoryToolExecutionStore;
 import io.github.msbtff.toolguard.core.ToolExecutionOutcome;
+import io.github.msbtff.toolguard.core.ToolExecutionStatus;
 import io.github.msbtff.toolguard.core.ToolExecutionStore;
+import io.github.msbtff.toolguard.core.ToolPolicy;
 import io.github.msbtff.toolguard.core.ToolSession;
 import io.github.msbtff.toolguard.core.ViolationCode;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import java.time.Duration;
 import java.util.Map;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -90,6 +95,40 @@ class ToolGuardAutoConfigurationTest {
                 assertNotNull(context.getBean(ToolSessionFactory.class));
                 assertNotNull(context.getBean(ToolExecutionStore.class));
                 assertNotNull(context.getBean(AuditLogFormatter.class));
+            });
+    }
+
+    @Test
+    void wiresCustomApprovalGateBeanAndDefaultSessionTimeoutIntoSessionFactory() {
+        InMemoryApprovalGate customGate = new InMemoryApprovalGate();
+        new ApplicationContextRunner()
+            .withConfiguration(AutoConfigurations.of(ToolGuardAutoConfiguration.class))
+            .withBean(ApprovalGate.class, () -> customGate)
+            .withPropertyValues(
+                "toolguard.default-access-level=MUTATING",
+                "toolguard.default-session-timeout=30s"
+            )
+            .run(context -> {
+                ToolSessionFactory factory = context.getBean(ToolSessionFactory.class);
+                ToolSession session = factory.newSession("acct-spring-approval")
+                    .registerTool(
+                        ToolPolicy.builder("refund_payment")
+                            .accessLevel(AccessLevel.MUTATING)
+                            .requireApproval(true)
+                            .build(),
+                        args -> ToolExecutionOutcome.completed(Map.of("refunded", true))
+                    )
+                    .build();
+
+                GuardrailException blocked = assertThrows(
+                    GuardrailException.class,
+                    () -> session.execute("refund_payment", Map.of("amount", 100L), "req-sp-1")
+                );
+                assertEquals(ViolationCode.APPROVAL_REQUIRED, blocked.violation().code());
+
+                customGate.grant("acct-spring-approval", "refund_payment", Map.of("amount", 100L), "ops", Duration.ofMinutes(1));
+                ToolExecutionOutcome ok = session.execute("refund_payment", Map.of("amount", 100L), "req-sp-1");
+                assertEquals(ToolExecutionStatus.COMPLETED, ok.status());
             });
     }
 }

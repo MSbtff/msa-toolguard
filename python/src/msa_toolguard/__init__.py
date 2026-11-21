@@ -15,6 +15,14 @@ from .a2a import (
     loopback_interface,
     validate_a2a_token,
 )
+from .approval import (
+    DENY_ALL_APPROVAL_GATE,
+    ApprovalDecision,
+    ApprovalGate,
+    ApprovalPredicate,
+    ApprovalRequest,
+    InMemoryApprovalGate,
+)
 from .audit import DEFAULT_REDACTED_KEYS, AuditEntry, AuditLogFormatter, AuditTrailListener
 from .digest import canonical_json, canonical_sha256
 from .evidence import EvidenceLedger
@@ -63,13 +71,19 @@ __all__ = [
     "A2ATaskConflictError",
     "AccessLevel",
     "AgentOutput",
+    "ApprovalDecision",
+    "ApprovalGate",
+    "ApprovalPredicate",
+    "ApprovalRequest",
     "AuditEntry",
     "AuditLogFormatter",
     "AuditTrailListener",
+    "DENY_ALL_APPROVAL_GATE",
     "EvidenceLedger",
     "EvidenceRecord",
     "GuardrailError",
     "GuardrailViolation",
+    "InMemoryApprovalGate",
     "InMemoryToolExecutionStore",
     "LoopbackA2AClient",
     "LoopbackA2AServer",

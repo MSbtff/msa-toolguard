@@ -2,17 +2,22 @@ package io.github.msbtff.toolguard.core;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Deterministic policy, scope, budget, idempotency, and evidence boundary for one agent session.
+ * Deterministic policy, scope, budget, approval, timeout, idempotency, and evidence boundary for one agent session.
  */
 public final class ToolSession {
     private record RegisteredTool(ToolPolicy policy, ToolHandler handler) {}
@@ -25,6 +30,9 @@ public final class ToolSession {
     private final Map<String, RegisteredTool> tools;
     private final ToolExecutionStore executionStore;
     private final ToolExecutionListener listener;
+    private final ApprovalGate approvalGate;
+    private final Clock clock;
+    private final Instant sessionDeadline;
     private final EvidenceLedger evidenceLedger;
     private final AtomicInteger totalCalls = new AtomicInteger(0);
     private final ConcurrentHashMap<String, AtomicInteger> toolCalls = new ConcurrentHashMap<>();
@@ -38,6 +46,9 @@ public final class ToolSession {
         this.tools = Map.copyOf(builder.tools);
         this.executionStore = builder.executionStore;
         this.listener = builder.listener;
+        this.approvalGate = builder.approvalGate;
+        this.clock = builder.clock;
+        this.sessionDeadline = builder.sessionTimeout == null ? null : builder.clock.instant().plus(builder.sessionTimeout);
         this.evidenceLedger = new EvidenceLedger(builder.clock);
     }
 
@@ -67,6 +78,12 @@ public final class ToolSession {
         ToolPolicy policy = null;
         boolean budgetReserved = false;
         try {
+            if (sessionDeadline != null && !clock.instant().isBefore(sessionDeadline)) {
+                throw deny(ViolationCode.SESSION_TIMEOUT, safeToolName,
+                    "Session '" + sessionId + "' has exceeded its execution deadline",
+                    "Stop calling additional tools and produce a final report with the collected evidence.");
+            }
+
             RegisteredTool registered = tools.get(safeToolName);
             if (registered == null) {
                 throw deny(ViolationCode.UNREGISTERED_TOOL, safeToolName,
@@ -101,13 +118,40 @@ public final class ToolSession {
 
             String normalizedRequestId = normalizeRequestId(policy, requestId);
 
+            boolean needsApproval = policy.requiresApprovalFor(resolvedArgs);
+            String payloadDigest = (needsApproval || normalizedRequestId != null)
+                ? CanonicalDigest.sha256(resolvedArgs)
+                : null;
+
+            if (needsApproval) {
+                ApprovalDecision decision = Objects.requireNonNull(
+                    approvalGate.check(new ApprovalRequest(
+                        sessionId,
+                        scopeKey,
+                        safeToolName,
+                        normalizedRequestId,
+                        payloadDigest,
+                        resolvedArgs
+                    )),
+                    "approvalGate returned null ApprovalDecision"
+                );
+                if (!decision.approved()) {
+                    String message = decision.reason().isBlank()
+                        ? "Tool '" + safeToolName + "' requires explicit approval"
+                        : decision.reason();
+                    String hint = decision.approvalId() != null && !decision.approvalId().isBlank()
+                        ? "Await approval '" + decision.approvalId() + "' for payloadDigest=" + payloadDigest
+                        : "Obtain explicit approval for payloadDigest=" + payloadDigest + " before retrying '" + safeToolName + "'.";
+                    throw deny(ViolationCode.APPROVAL_REQUIRED, safeToolName, message, hint);
+                }
+            }
+
             checkAndIncrementBudgets(policy);
             budgetReserved = true;
 
             ToolPolicy activePolicy = policy;
             ToolExecutionOutcome outcome;
             if (normalizedRequestId != null) {
-                String payloadDigest = CanonicalDigest.sha256(resolvedArgs);
                 outcome = executionStore.executeIdempotent(
                     scopeKey,
                     safeToolName,
@@ -179,7 +223,10 @@ public final class ToolSession {
         String requestId
     ) {
         try {
-            ToolExecutionOutcome raw = Objects.requireNonNull(handler.invoke(resolvedArgs), "tool handler returned null");
+            ToolExecutionOutcome raw = Objects.requireNonNull(
+                invokeWithTimeout(policy, handler, resolvedArgs),
+                "tool handler returned null"
+            );
             EvidenceRecord record = evidenceLedger.record(
                 policy.evidencePrefix(),
                 policy.name(),
@@ -199,6 +246,68 @@ public final class ToolSession {
             );
             return ToolExecutionOutcome.pending(requestId, message).withEvidence(record.evidenceId(), requestId);
         }
+    }
+
+    private ToolExecutionOutcome invokeWithTimeout(
+        ToolPolicy policy,
+        ToolHandler handler,
+        Map<String, Object> resolvedArgs
+    ) {
+        Duration effectiveTimeout = computeEffectiveTimeout(policy.executionTimeout());
+        if (effectiveTimeout == null) {
+            return handler.invoke(resolvedArgs);
+        }
+        if (effectiveTimeout.isZero() || effectiveTimeout.isNegative()) {
+            throw new UncertainExecutionException("Session deadline exceeded before tool invocation");
+        }
+        CompletableFuture<ToolExecutionOutcome> future = new CompletableFuture<>();
+        Thread worker = Thread.ofVirtual()
+            .name("toolguard-exec-" + policy.name())
+            .start(() -> {
+                try {
+                    future.complete(handler.invoke(resolvedArgs));
+                } catch (Throwable failure) {
+                    future.completeExceptionally(failure);
+                }
+            });
+        try {
+            return future.get(effectiveTimeout.toNanos(), TimeUnit.NANOSECONDS);
+        } catch (TimeoutException timeout) {
+            worker.interrupt();
+            throw new UncertainExecutionException(
+                "Tool '" + policy.name() + "' exceeded execution timeout (" + effectiveTimeout.toMillis() + "ms)",
+                timeout
+            );
+        } catch (InterruptedException interrupted) {
+            worker.interrupt();
+            Thread.currentThread().interrupt();
+            throw new UncertainExecutionException(
+                "Interrupted while awaiting tool '" + policy.name() + "' execution",
+                interrupted
+            );
+        } catch (ExecutionException execFailure) {
+            Throwable cause = execFailure.getCause();
+            if (cause instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            if (cause instanceof Error error) {
+                throw error;
+            }
+            throw new IllegalStateException("Tool execution failed: " + policy.name(), cause);
+        }
+    }
+
+    private Duration computeEffectiveTimeout(Duration toolTimeout) {
+        Duration remainingSession = sessionDeadline == null
+            ? null
+            : Duration.between(clock.instant(), sessionDeadline);
+        if (toolTimeout == null) {
+            return remainingSession;
+        }
+        if (remainingSession == null) {
+            return toolTimeout;
+        }
+        return remainingSession.compareTo(toolTimeout) < 0 ? remainingSession : toolTimeout;
     }
 
     private Map<String, Object> resolveAndValidateArguments(ToolPolicy policy, Map<String, Object> rawArguments) {
@@ -275,6 +384,8 @@ public final class ToolSession {
         private final Map<String, RegisteredTool> tools = new LinkedHashMap<>();
         private ToolExecutionStore executionStore = new InMemoryToolExecutionStore();
         private ToolExecutionListener listener = ToolExecutionListener.NOOP;
+        private ApprovalGate approvalGate = ApprovalGate.DENY_ALL;
+        private Duration sessionTimeout;
         private Clock clock = Clock.systemUTC();
 
         private Builder() {}
@@ -336,6 +447,19 @@ public final class ToolSession {
                     additionalListener.onEvent(event);
                 };
             }
+            return this;
+        }
+
+        public Builder approvalGate(ApprovalGate approvalGate) {
+            this.approvalGate = Objects.requireNonNull(approvalGate, "approvalGate");
+            return this;
+        }
+
+        public Builder sessionTimeout(Duration sessionTimeout) {
+            if (sessionTimeout != null && sessionTimeout.toMillis() < 1) {
+                throw new IllegalArgumentException("sessionTimeout must be >= 1ms");
+            }
+            this.sessionTimeout = sessionTimeout;
             return this;
         }
 

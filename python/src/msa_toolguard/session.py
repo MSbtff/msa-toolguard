@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from threading import Lock
+from datetime import datetime, timedelta, timezone
+from threading import Event, Lock, Thread
 import time
 from typing import Any, Callable
 from uuid import uuid4
 
+from .approval import DENY_ALL_APPROVAL_GATE, ApprovalGate, ApprovalRequest
 from .digest import canonical_sha256
 from .evidence import EvidenceLedger
 from .models import (
@@ -38,10 +39,14 @@ class ToolSession:
         bound_parameters: dict[str, Any] | None = None,
         execution_store: ToolExecutionStore | None = None,
         listeners: list[ToolExecutionListener] | None = None,
+        approval_gate: ApprovalGate | None = None,
+        session_timeout_seconds: float | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         if max_total_calls < 1:
             raise ValueError("max_total_calls must be >= 1")
+        if session_timeout_seconds is not None and session_timeout_seconds <= 0:
+            raise ValueError("session_timeout_seconds must be positive")
         self.session_id = session_id or str(uuid4())
         self.scope_key = scope_key
         self.max_access_level = max_access_level
@@ -49,7 +54,14 @@ class ToolSession:
         self.bound_parameters: dict[str, Any] = dict(bound_parameters or {})
         self.execution_store: ToolExecutionStore = execution_store or InMemoryToolExecutionStore()
         self._listeners: list[ToolExecutionListener] = list(listeners or [])
-        self.evidence_ledger = EvidenceLedger(clock or (lambda: datetime.now(timezone.utc)))
+        self._approval_gate: ApprovalGate = approval_gate or DENY_ALL_APPROVAL_GATE
+        self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(timezone.utc))
+        self._session_deadline: datetime | None = (
+            self._clock() + timedelta(seconds=session_timeout_seconds)
+            if session_timeout_seconds is not None
+            else None
+        )
+        self.evidence_ledger = EvidenceLedger(self._clock)
         self._tools: dict[str, tuple[ToolPolicy, ToolHandler]] = {}
         self._budget_lock = Lock()
         self._total_calls = 0
@@ -79,6 +91,14 @@ class ToolSession:
         policy: ToolPolicy | None = None
         budget_reserved = False
         try:
+            if self._session_deadline is not None and self._clock() >= self._session_deadline:
+                raise self._deny(
+                    ViolationCode.SESSION_TIMEOUT,
+                    safe_name,
+                    f"Session '{self.session_id}' has exceeded its execution deadline",
+                    "Stop calling additional tools and produce a final report with the collected evidence.",
+                )
+
             registered = self._tools.get(safe_name)
             if registered is None:
                 raise self._deny(
@@ -119,11 +139,35 @@ class ToolSession:
                     )
 
             normalized_request_id = self._normalize_request_id(policy, request_id)
+            needs_approval = policy.requires_approval_for(resolved_args)
+            payload_digest = canonical_sha256(resolved_args) if (needs_approval or normalized_request_id is not None) else None
+
+            if needs_approval:
+                assert payload_digest is not None
+                decision = self._approval_gate.check(
+                    ApprovalRequest(
+                        session_id=self.session_id,
+                        scope_key=self.scope_key,
+                        tool_name=safe_name,
+                        request_id=normalized_request_id,
+                        payload_digest=payload_digest,
+                        arguments=dict(resolved_args),
+                    )
+                )
+                if not decision.approved:
+                    message = decision.reason or f"Tool '{safe_name}' requires explicit approval"
+                    hint = (
+                        f"Await approval '{decision.approval_id}' for payloadDigest={payload_digest}"
+                        if decision.approval_id
+                        else f"Obtain explicit approval for payloadDigest={payload_digest} before retrying '{safe_name}'."
+                    )
+                    raise self._deny(ViolationCode.APPROVAL_REQUIRED, safe_name, message, hint)
+
             self._check_and_increment_budgets(policy)
             budget_reserved = True
 
             if normalized_request_id is not None:
-                payload_digest = canonical_sha256(resolved_args)
+                assert payload_digest is not None
                 outcome = self.execution_store.execute_idempotent(
                     self.scope_key,
                     safe_name,
@@ -193,7 +237,7 @@ class ToolSession:
         request_id: str | None,
     ) -> ToolExecutionOutcome:
         try:
-            raw = handler(dict(resolved_args))
+            raw = self._invoke_with_timeout(policy, handler, resolved_args)
             if raw is None:
                 raise ValueError("tool handler returned None")
             record = self.evidence_ledger.record(
@@ -214,6 +258,50 @@ class ToolSession:
                 {"reason": message},
             )
             return ToolExecutionOutcome.pending(request_id, message).with_evidence(record.evidence_id, request_id)
+
+    def _invoke_with_timeout(
+        self,
+        policy: ToolPolicy,
+        handler: ToolHandler,
+        resolved_args: dict[str, Any],
+    ) -> ToolExecutionOutcome:
+        timeout_seconds = self._compute_effective_timeout_seconds(policy.execution_timeout_ms)
+        if timeout_seconds is None:
+            return handler(dict(resolved_args))
+        if timeout_seconds <= 0:
+            raise UncertainExecutionError("Session deadline exceeded before tool invocation")
+        done = Event()
+        box: dict[str, Any] = {}
+
+        def worker() -> None:
+            try:
+                box["outcome"] = handler(dict(resolved_args))
+            except BaseException as exc:
+                box["error"] = exc
+            finally:
+                done.set()
+
+        Thread(target=worker, name=f"toolguard-exec-{policy.name}", daemon=True).start()
+        if not done.wait(timeout_seconds):
+            raise UncertainExecutionError(
+                f"Tool '{policy.name}' exceeded execution timeout ({int(round(timeout_seconds * 1000))}ms)"
+            )
+        if "error" in box:
+            raise box["error"]
+        return box["outcome"]
+
+    def _compute_effective_timeout_seconds(self, tool_timeout_ms: int | None) -> float | None:
+        tool_sec = None if tool_timeout_ms is None else tool_timeout_ms / 1000.0
+        remaining = (
+            None
+            if self._session_deadline is None
+            else (self._session_deadline - self._clock()).total_seconds()
+        )
+        if tool_sec is None:
+            return remaining
+        if remaining is None:
+            return tool_sec
+        return min(tool_sec, remaining)
 
     def _resolve_and_validate_arguments(
         self,
