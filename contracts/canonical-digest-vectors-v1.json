@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "vectors": [
+    {
+      "name": "empty_object",
+      "input": {},
+      "expectedCanonicalJson": "{}",
+      "expectedSha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "name": "unsorted_nested_object",
+      "input": {
+        "z": 1,
+        "a": {
+          "d": false,
+          "b": null,
+          "c": [3, 2, 1]
+        },
+        "m": "text"
+      },
+      "expectedCanonicalJson": "{\"a\":{\"b\":null,\"c\":[3,2,1],\"d\":false},\"m\":\"text\",\"z\":1}",
+      "expectedSha256": "8a13fefe24944918b4da6220b4f98a1c883fe4539b567147941c3e4270dd22f8"
+    },
+    {
+      "name": "korean_and_escapes",
+      "input": {
+        "reason": "유통기한 \"경과\"\n줄바꿈\t탭\\역슬래시\r캐리지\b백\f폼\u0001제어",
+        "accountId": 7,
+        "ratio": 0.75,
+        "ok": true
+      },
+      "expectedCanonicalJson": "{\"accountId\":7,\"ok\":true,\"ratio\":0.75,\"reason\":\"유통기한 \\\"경과\\\"\\n줄바꿈\\t탭\\\\역슬래시\\r캐리지\\b백\\f폼\\u0001제어\"}",
+      "expectedSha256": "cd11f9811acfc75218ea3b0300312e68d528216aba30c6e6a70de041354f4d39"
+    },
+    {
+      "name": "mixed_array",
+      "input": [
+        null,
+        true,
+        false,
+        -42,
+        0,
+        {
+          "k2": "v2",
+          "k1": "v1"
+        }
+      ],
+      "expectedCanonicalJson": "[null,true,false,-42,0,{\"k1\":\"v1\",\"k2\":\"v2\"}]",
+      "expectedSha256": "066e487e0b8938bafc72f515593b3864d5325c6666305034038fc5df22c59c67"
+    }
+  ]
+}

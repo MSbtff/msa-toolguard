@@ -66,8 +66,36 @@ subprojects {
         }
     }
 
+    tasks.named('jacocoTestCoverageVerification') {
+        dependsOn tasks.named('test')
+        if (project.name == 'toolguard-spring-boot-starter') {
+            classDirectories.setFrom(files(classDirectories.files.collect {
+                fileTree(dir: it, exclude: [
+                    '**/store/**',
+                    '**/*AutoConfiguration*'
+                ])
+            }))
+        }
+        violationRules {
+            rule {
+                limit {
+                    counter = 'LINE'
+                    value = 'COVEREDRATIO'
+                    minimum = project.name == 'toolguard-core' ? 0.90 : 0.80
+                }
+                if (project.name == 'toolguard-core') {
+                    limit {
+                        counter = 'BRANCH'
+                        value = 'COVEREDRATIO'
+                        minimum = 0.75
+                    }
+                }
+            }
+        }
+    }
+
     tasks.named('check') {
-        dependsOn tasks.named('integrationTest')
+        dependsOn tasks.named('jacocoTestCoverageVerification'), tasks.named('integrationTest')
     }
 
     if (project.name.startsWith('toolguard-')) {

@@ -24,6 +24,9 @@ from msa_toolguard import (
     VerificationExhaustedError,
     VerifiedAgentRunner,
     ViolationCode,
+    allowed_keys_rule,
+    canonical_json,
+    canonical_sha256,
     forbid_keys_rule,
     integer_range_rule,
 )
@@ -213,6 +216,49 @@ class CoreContractsTest(unittest.TestCase):
         with self.assertRaises(VerificationExhaustedError) as ctx:
             failing_runner.run_or_raise(session, lambda s, p, n: AgentOutput("wrong", ("E99",)))
         self.assertEqual(2, ctx.exception.result.attempts)
+
+    def test_canonical_digest_matches_shared_contract_vectors(self) -> None:
+        doc = json.loads((CONTRACTS_DIR / "canonical-digest-vectors-v1.json").read_text(encoding="utf-8"))
+        vectors = doc["vectors"]
+        self.assertGreater(len(vectors), 0)
+        for vector in vectors:
+            name = vector["name"]
+            self.assertEqual(
+                vector["expectedCanonicalJson"],
+                canonical_json(vector["input"]),
+                f"canonical JSON mismatch for {name}",
+            )
+            self.assertEqual(
+                vector["expectedSha256"],
+                canonical_sha256(vector["input"]),
+                f"SHA-256 mismatch for {name}",
+            )
+
+    def test_case_insensitive_forbid_keys_and_allowed_keys_rules(self) -> None:
+        session = ToolSession(bound_parameters={"accountId": 7})
+        session.register_tool(
+            ToolPolicy(
+                name="search_items",
+                max_calls=5,
+                bound_parameters=("accountId",),
+                deny_rules=(
+                    forbid_keys_rule(["authorization", "api_key"]),
+                    allowed_keys_rule(["accountId", "query"]),
+                ),
+            ),
+            lambda args: ToolExecutionOutcome.completed({"query": args.get("query")}),
+        )
+
+        with self.assertRaises(GuardrailError) as auth_ctx:
+            session.execute("search_items", {"Authorization": "Bearer secret", "query": "milk"})
+        self.assertEqual(ViolationCode.POLICY_DENIED, auth_ctx.exception.violation.code)
+
+        with self.assertRaises(GuardrailError) as extra_ctx:
+            session.execute("search_items", {"query": "milk", "unexpected": True})
+        self.assertEqual(ViolationCode.POLICY_DENIED, extra_ctx.exception.violation.code)
+
+        ok = session.execute("search_items", {"query": "milk"})
+        self.assertEqual(ToolExecutionStatus.COMPLETED, ok.status)
 
 
 if __name__ == "__main__":
