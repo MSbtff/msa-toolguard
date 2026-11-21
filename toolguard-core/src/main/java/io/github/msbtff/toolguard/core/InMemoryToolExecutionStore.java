@@ -1,14 +1,51 @@
 package io.github.msbtff.toolguard.core;
 
+import java.time.Clock;
+import java.time.Duration;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
 
+/**
+ * Thread-safe, bounded in-memory {@link ToolExecutionStore} using lock striping, collision-free composite keys,
+ * and TTL/LRU eviction to prevent unbounded memory growth.
+ */
 public final class InMemoryToolExecutionStore implements ToolExecutionStore {
-    private record StoredExecution(String payloadDigest, ToolExecutionOutcome outcome) {}
+    public static final int DEFAULT_MAX_ENTRIES = 10_000;
+    public static final Duration DEFAULT_ENTRY_TTL = Duration.ofHours(24);
+    private static final int LOCK_STRIPES = 256;
 
-    private final ConcurrentHashMap<String, Object> locks = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, StoredExecution> entries = new ConcurrentHashMap<>();
+    private record ExecutionKey(String scopeKey, String toolName, String requestId) {}
+
+    private record StoredExecution(String payloadDigest, ToolExecutionOutcome outcome, long updatedAtMillis) {}
+
+    private final int maxEntries;
+    private final long entryTtlMillis;
+    private final Clock clock;
+    private final Object[] lockStripes = new Object[LOCK_STRIPES];
+    private final Map<ExecutionKey, StoredExecution> entries = new LinkedHashMap<>(64, 0.75f, true);
+
+    public InMemoryToolExecutionStore() {
+        this(DEFAULT_MAX_ENTRIES, DEFAULT_ENTRY_TTL, Clock.systemUTC());
+    }
+
+    public InMemoryToolExecutionStore(int maxEntries, Duration entryTtl, Clock clock) {
+        if (maxEntries < 1) {
+            throw new IllegalArgumentException("maxEntries must be >= 1");
+        }
+        Objects.requireNonNull(entryTtl, "entryTtl");
+        if (entryTtl.isZero() || entryTtl.isNegative()) {
+            throw new IllegalArgumentException("entryTtl must be positive");
+        }
+        this.maxEntries = maxEntries;
+        this.entryTtlMillis = entryTtl.toMillis();
+        this.clock = Objects.requireNonNull(clock, "clock");
+        for (int i = 0; i < LOCK_STRIPES; i++) {
+            lockStripes[i] = new Object();
+        }
+    }
 
     @Override
     public ToolExecutionOutcome executeIdempotent(
@@ -24,10 +61,11 @@ public final class InMemoryToolExecutionStore implements ToolExecutionStore {
         Objects.requireNonNull(payloadDigest, "payloadDigest");
         Objects.requireNonNull(action, "action");
 
-        String compositeKey = scopeKey + "::" + toolName + "::" + requestId;
-        Object lock = locks.computeIfAbsent(compositeKey, k -> new Object());
-        synchronized (lock) {
-            StoredExecution existing = entries.get(compositeKey);
+        ExecutionKey key = new ExecutionKey(scopeKey, toolName, requestId);
+        Object stripeLock = lockStripes[Math.floorMod(key.hashCode(), LOCK_STRIPES)];
+        synchronized (stripeLock) {
+            long now = clock.millis();
+            StoredExecution existing = getNonExpired(key, now);
             if (existing != null) {
                 if (!existing.payloadDigest().equals(payloadDigest)) {
                     throw new GuardrailException(new GuardrailViolation(
@@ -41,21 +79,91 @@ public final class InMemoryToolExecutionStore implements ToolExecutionStore {
                     return existing.outcome().asReplayed();
                 }
             } else {
-                entries.put(compositeKey, new StoredExecution(
-                    payloadDigest,
-                    ToolExecutionOutcome.pending(requestId, "Execution in progress")
-                ));
+                putBounded(
+                    key,
+                    new StoredExecution(
+                        payloadDigest,
+                        ToolExecutionOutcome.pending(requestId, "Execution in progress"),
+                        now
+                    ),
+                    now
+                );
             }
 
             try {
                 ToolExecutionOutcome result = Objects.requireNonNull(action.get(), "tool action returned null");
-                entries.put(compositeKey, new StoredExecution(payloadDigest, result));
+                long completedAt = clock.millis();
+                putBounded(key, new StoredExecution(payloadDigest, result, completedAt), completedAt);
                 return result;
             } catch (UncertainExecutionException uncertain) {
                 ToolExecutionOutcome pending = ToolExecutionOutcome.pending(requestId, uncertain.getMessage());
-                entries.put(compositeKey, new StoredExecution(payloadDigest, pending));
+                long failedAt = clock.millis();
+                putBounded(key, new StoredExecution(payloadDigest, pending, failedAt), failedAt);
                 return pending;
             }
         }
+    }
+
+    public int size() {
+        synchronized (entries) {
+            pruneExpiredLocked(clock.millis());
+            return entries.size();
+        }
+    }
+
+    private StoredExecution getNonExpired(ExecutionKey key, long now) {
+        synchronized (entries) {
+            StoredExecution existing = entries.get(key);
+            if (existing == null) {
+                return null;
+            }
+            if (isExpired(existing, now)) {
+                entries.remove(key);
+                return null;
+            }
+            return existing;
+        }
+    }
+
+    private void putBounded(ExecutionKey key, StoredExecution value, long now) {
+        synchronized (entries) {
+            entries.put(key, value);
+            if (entries.size() > maxEntries) {
+                pruneExpiredLocked(now);
+            }
+            if (entries.size() > maxEntries) {
+                // First evict oldest terminal (COMPLETED/REJECTED) entries, preserving active PENDING records when possible.
+                Iterator<Map.Entry<ExecutionKey, StoredExecution>> it = entries.entrySet().iterator();
+                while (entries.size() > maxEntries && it.hasNext()) {
+                    Map.Entry<ExecutionKey, StoredExecution> candidate = it.next();
+                    if (!candidate.getKey().equals(key)
+                        && candidate.getValue().outcome().status() != ToolExecutionStatus.PENDING) {
+                        it.remove();
+                    }
+                }
+            }
+            if (entries.size() > maxEntries) {
+                Iterator<Map.Entry<ExecutionKey, StoredExecution>> it = entries.entrySet().iterator();
+                while (entries.size() > maxEntries && it.hasNext()) {
+                    Map.Entry<ExecutionKey, StoredExecution> candidate = it.next();
+                    if (!candidate.getKey().equals(key)) {
+                        it.remove();
+                    }
+                }
+            }
+        }
+    }
+
+    private void pruneExpiredLocked(long now) {
+        Iterator<Map.Entry<ExecutionKey, StoredExecution>> it = entries.entrySet().iterator();
+        while (it.hasNext()) {
+            if (isExpired(it.next().getValue(), now)) {
+                it.remove();
+            }
+        }
+    }
+
+    private boolean isExpired(StoredExecution record, long now) {
+        return now - record.updatedAtMillis() >= entryTtlMillis;
     }
 }

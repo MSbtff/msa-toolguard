@@ -7,19 +7,24 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.github.msbtff.toolguard.core.AccessLevel;
+import io.github.msbtff.toolguard.core.AgentOutput;
 import io.github.msbtff.toolguard.core.GuardrailException;
+import io.github.msbtff.toolguard.core.OutputVerifier;
 import io.github.msbtff.toolguard.core.ToolExecutionOutcome;
 import io.github.msbtff.toolguard.core.ToolExecutionStatus;
 import io.github.msbtff.toolguard.core.ToolExecutionStore;
 import io.github.msbtff.toolguard.core.ToolPolicy;
 import io.github.msbtff.toolguard.core.ToolSession;
 import io.github.msbtff.toolguard.core.UncertainExecutionException;
+import io.github.msbtff.toolguard.core.VerificationResult;
 import io.github.msbtff.toolguard.core.ViolationCode;
 import io.github.msbtff.toolguard.spring.ToolGuardAutoConfiguration;
 import io.github.msbtff.toolguard.spring.ToolSessionFactory;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -119,7 +124,8 @@ class RedisToolExecutionStoreIntegrationTest {
         assertFalse(completed.replayed());
         assertEquals(4401L, completed.facts().get("movementId"));
 
-        // Process 3 (another restart): replays from Redis without invoking downstream
+        // Process 3 (another restart): replays from Redis without invoking downstream,
+        // synchronizes EvidenceLedger, and satisfies requires + OutputVerifier
         RedisToolExecutionStore store3 = new RedisToolExecutionStore(redisTemplate);
         ToolSession session3 = ToolSession.builder()
             .scopeKey("account-redis-1")
@@ -128,6 +134,10 @@ class RedisToolExecutionStoreIntegrationTest {
             .registerTool(policy, args -> {
                 throw new AssertionError("Downstream must not be invoked on Redis replay");
             })
+            .registerTool(
+                ToolPolicy.builder("confirm_redis_settlement").requires("retry_disposal").maxCalls(1).build(),
+                args -> ToolExecutionOutcome.completed(Map.of("ok", true))
+            )
             .build();
 
         ToolExecutionOutcome replayed = session3.execute("retry_disposal", Map.of("disposalId", "disp-r1"), "req-r1");
@@ -136,6 +146,72 @@ class RedisToolExecutionStoreIntegrationTest {
         assertEquals(completed.evidenceId(), replayed.evidenceId());
         assertEquals(4401L, replayed.facts().get("movementId"));
         assertEquals(2, calls.get());
+        assertTrue(session3.evidenceLedger().hasCompletedTool("retry_disposal"));
+
+        ToolExecutionOutcome confirmed = session3.execute("confirm_redis_settlement", Map.of());
+        VerificationResult verified = OutputVerifier.builder()
+            .requireToolExecuted("retry_disposal")
+            .requireToolExecuted("confirm_redis_settlement")
+            .build()
+            .verify(new AgentOutput("confirmed", List.of(replayed.evidenceId(), confirmed.evidenceId()), Map.of()), session3.evidenceLedger());
+        assertTrue(verified.verified());
+    }
+
+    @Test
+    void fencedLuaWritePreventsExpiredLockHolderFromOverwritingNewerCommittedState() throws Exception {
+        RedisToolExecutionStore store = new RedisToolExecutionStore(
+            redisTemplate,
+            "toolguard:fence:",
+            Duration.ofMillis(200),
+            Duration.ofSeconds(3),
+            Duration.ofMinutes(5)
+        );
+        CountDownLatch worker1Started = new CountDownLatch(1);
+        CountDownLatch worker2Committed = new CountDownLatch(1);
+
+        try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
+            Future<ToolExecutionOutcome> staleWorker = pool.submit(() -> store.executeIdempotent(
+                "acct-fence",
+                "retry_disposal",
+                "req-fence-1",
+                "digest-same",
+                () -> {
+                    worker1Started.countDown();
+                    try {
+                        // Wait until worker 2 has acquired the expired lock and committed newer state
+                        assertTrue(worker2Committed.await(5, TimeUnit.SECONDS));
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                    return ToolExecutionOutcome.completed(Map.of("winner", "stale-worker-1"));
+                }
+            ));
+
+            assertTrue(worker1Started.await(5, TimeUnit.SECONDS));
+            // Wait past the 200ms lock TTL so worker 2 acquires a fresh lock
+            Thread.sleep(280);
+
+            ToolExecutionOutcome freshOutcome = store.executeIdempotent(
+                "acct-fence",
+                "retry_disposal",
+                "req-fence-1",
+                "digest-same",
+                () -> ToolExecutionOutcome.completed(Map.of("winner", "fresh-worker-2"))
+            );
+            worker2Committed.countDown();
+
+            assertEquals(ToolExecutionStatus.COMPLETED, freshOutcome.status());
+            assertEquals("fresh-worker-2", freshOutcome.facts().get("winner"));
+
+            ToolExecutionOutcome staleOutcome = staleWorker.get(5, TimeUnit.SECONDS);
+            assertEquals(ToolExecutionStatus.PENDING, staleOutcome.status());
+            assertTrue(staleOutcome.message().contains("lock expired"));
+
+            // Redis must still hold fresh-worker-2, NOT overwritten by stale-worker-1
+            ToolExecutionOutcome persisted = store.find("acct-fence", "retry_disposal", "req-fence-1").orElseThrow();
+            assertEquals(ToolExecutionStatus.COMPLETED, persisted.status());
+            assertEquals("fresh-worker-2", persisted.facts().get("winner"));
+        }
     }
 
     @Test

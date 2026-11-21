@@ -29,7 +29,7 @@ public final class Slf4jAuditToolExecutionListener implements ToolExecutionListe
     @Override
     public void onEvent(ToolExecutionEvent event) {
         String jsonLine = formatter.formatEventJson(event, clock.instant());
-        if (event.allowed()) {
+        if (event.allowed() && event.status() != null) {
             AUDIT_LOG.info(jsonLine);
         } else {
             AUDIT_LOG.warn(jsonLine);

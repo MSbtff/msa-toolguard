@@ -76,6 +76,8 @@ class ToolSession:
     ) -> ToolExecutionOutcome:
         started = time.perf_counter()
         safe_name = "" if tool_name is None else str(tool_name)
+        policy: ToolPolicy | None = None
+        budget_reserved = False
         try:
             registered = self._tools.get(safe_name)
             if registered is None:
@@ -118,6 +120,7 @@ class ToolSession:
 
             normalized_request_id = self._normalize_request_id(policy, request_id)
             self._check_and_increment_budgets(policy)
+            budget_reserved = True
 
             if normalized_request_id is not None:
                 payload_digest = canonical_sha256(resolved_args)
@@ -128,6 +131,16 @@ class ToolSession:
                     payload_digest,
                     lambda: self._invoke_and_record(policy, handler, resolved_args, normalized_request_id),
                 )
+                if outcome.replayed or outcome.evidence_id is None:
+                    synced = self.evidence_ledger.record_replayed(
+                        outcome.evidence_id,
+                        policy.evidence_prefix,
+                        policy.name,
+                        outcome.status,
+                        normalized_request_id,
+                        outcome.facts,
+                    )
+                    outcome = outcome.with_evidence(synced.evidence_id, normalized_request_id)
             else:
                 outcome = self._invoke_and_record(policy, handler, resolved_args, None)
 
@@ -144,12 +157,27 @@ class ToolSession:
             )
             return outcome
         except GuardrailError as blocked:
+            if budget_reserved and policy is not None:
+                self._release_budget(policy)
             self._emit(
                 ToolExecutionEvent(
                     session_id=self.session_id,
                     tool_name=safe_name,
                     allowed=False,
                     violation_code=blocked.violation.code,
+                    status=None,
+                    replayed=False,
+                    elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
+                )
+            )
+            raise
+        except Exception:
+            self._emit(
+                ToolExecutionEvent(
+                    session_id=self.session_id,
+                    tool_name=safe_name,
+                    allowed=True,
+                    violation_code=None,
                     status=None,
                     replayed=False,
                     elapsed_ms=round((time.perf_counter() - started) * 1000.0, 3),
@@ -251,6 +279,14 @@ class ToolSession:
                 )
             self._total_calls += 1
             self._tool_calls[policy.name] = used + 1
+
+    def _release_budget(self, policy: ToolPolicy) -> None:
+        with self._budget_lock:
+            if self._total_calls > 0:
+                self._total_calls -= 1
+            used = self._tool_calls.get(policy.name, 0)
+            if used > 0:
+                self._tool_calls[policy.name] = used - 1
 
     def _emit(self, event: ToolExecutionEvent) -> None:
         for listener in self._listeners:

@@ -63,6 +63,7 @@ public class ToolGuardProperties {
 
     public static class StoreProperties {
         private StoreType type = StoreType.IN_MEMORY;
+        private InMemoryProperties inMemory = new InMemoryProperties();
         private JdbcProperties jdbc = new JdbcProperties();
         private RedisProperties redis = new RedisProperties();
 
@@ -72,6 +73,14 @@ public class ToolGuardProperties {
 
         public void setType(StoreType type) {
             this.type = type;
+        }
+
+        public InMemoryProperties getInMemory() {
+            return inMemory;
+        }
+
+        public void setInMemory(InMemoryProperties inMemory) {
+            this.inMemory = inMemory;
         }
 
         public JdbcProperties getJdbc() {
@@ -91,9 +100,31 @@ public class ToolGuardProperties {
         }
     }
 
+    public static class InMemoryProperties {
+        private int maxEntries = 10_000;
+        private Duration entryTtl = Duration.ofHours(24);
+
+        public int getMaxEntries() {
+            return maxEntries;
+        }
+
+        public void setMaxEntries(int maxEntries) {
+            this.maxEntries = maxEntries;
+        }
+
+        public Duration getEntryTtl() {
+            return entryTtl;
+        }
+
+        public void setEntryTtl(Duration entryTtl) {
+            this.entryTtl = entryTtl;
+        }
+    }
+
     public static class JdbcProperties {
         private String tableName = "toolguard_executions";
         private boolean initializeSchema = true;
+        private Duration lockTimeout = Duration.ofSeconds(10);
 
         public String getTableName() {
             return tableName;
@@ -109,6 +140,14 @@ public class ToolGuardProperties {
 
         public void setInitializeSchema(boolean initializeSchema) {
             this.initializeSchema = initializeSchema;
+        }
+
+        public Duration getLockTimeout() {
+            return lockTimeout;
+        }
+
+        public void setLockTimeout(Duration lockTimeout) {
+            this.lockTimeout = lockTimeout;
         }
     }
 
