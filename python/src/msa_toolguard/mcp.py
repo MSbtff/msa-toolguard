@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hmac
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import secrets
 from threading import Thread
@@ -28,14 +28,19 @@ def session_dispatcher(session: ToolSession) -> ToolDispatcher:
                 "error": "Tool arguments must be a JSON object",
                 "code": "POLICY_DENIED",
             }
-        request_id = arguments.get("requestId") if isinstance(arguments.get("requestId"), str) else None
+        raw_request_id = arguments.get("requestId")
+        request_id = raw_request_id if isinstance(raw_request_id, str) else None
+        tool_args = {k: v for k, v in arguments.items() if k != "requestId"} if "requestId" in arguments else dict(arguments)
         try:
-            outcome = session.execute(name or "", arguments, request_id=request_id)
+            outcome = session.execute(name or "", tool_args, request_id=request_id)
+            facts = dict(outcome.facts)
             payload: dict[str, Any] = {
-                "status": outcome.status.value,
+                **facts,
+                "executionStatus": outcome.status.value,
                 "replayed": outcome.replayed,
-                **outcome.facts,
+                "facts": facts,
             }
+            payload.setdefault("status", outcome.status.value)
             if outcome.evidence_id is not None:
                 payload["evidenceId"] = outcome.evidence_id
             if outcome.rejection_code is not None:
@@ -123,7 +128,8 @@ class LoopbackMcpServer:
                 result = endpoint.dispatch(message)
                 self.reply(200, {"jsonrpc": "2.0", "id": message["id"], **result})
 
-        self.server = HTTPServer(("127.0.0.1", 0), Handler)
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
         self.thread = Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
 
     @classmethod
@@ -184,11 +190,15 @@ class LoopbackMcpServer:
             params = message.get("params")
             if not isinstance(params, dict):
                 return {"error": {"code": -32602, "message": "Invalid parameters"}}
-            result = self.dispatcher(params.get("name"), params.get("arguments", {}))
+            try:
+                result = self.dispatcher(params.get("name"), params.get("arguments", {}))
+            except Exception:
+                return {"error": {"code": -32603, "message": "Tool execution failed"}}
+            is_error = "error" in result and "executionStatus" not in result
             return {
                 "result": {
                     "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False)}],
-                    "isError": "error" in result,
+                    "isError": is_error,
                 }
             }
         return {"error": {"code": -32601, "message": "Method not allowed"}}

@@ -57,8 +57,13 @@ public class ToolGuardAutoConfiguration {
     static class InMemoryStoreConfiguration {
         @Bean
         @ConditionalOnMissingBean(ToolExecutionStore.class)
-        public ToolExecutionStore inMemoryToolExecutionStore() {
-            return new InMemoryToolExecutionStore();
+        public ToolExecutionStore inMemoryToolExecutionStore(ToolGuardProperties properties) {
+            ToolGuardProperties.InMemoryProperties inMemory = properties.getStore().getInMemory();
+            return new InMemoryToolExecutionStore(
+                inMemory.getMaxEntries(),
+                inMemory.getEntryTtl(),
+                Clock.systemUTC()
+            );
         }
     }
 
@@ -75,7 +80,8 @@ public class ToolGuardAutoConfiguration {
                 dataSource,
                 jdbc.getTableName(),
                 Clock.systemUTC(),
-                jdbc.isInitializeSchema()
+                jdbc.isInitializeSchema(),
+                jdbc.getLockTimeout()
             );
         }
     }

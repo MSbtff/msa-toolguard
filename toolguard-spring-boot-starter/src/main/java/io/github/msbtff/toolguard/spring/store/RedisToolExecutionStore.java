@@ -8,7 +8,11 @@ import io.github.msbtff.toolguard.core.ToolExecutionStatus;
 import io.github.msbtff.toolguard.core.ToolExecutionStore;
 import io.github.msbtff.toolguard.core.UncertainExecutionException;
 import io.github.msbtff.toolguard.core.ViolationCode;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -21,7 +25,8 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 
 /**
  * Redis-backed durable {@link ToolExecutionStore} using atomic distributed locks ({@code SET NX PX}
- * + Lua compare-and-delete) and persistent JSON execution records for cross-restart recovery.
+ * + Lua compare-and-delete), collision-free SHA-256 keys, and Lua lock-fenced JSON state writes
+ * so a stale worker whose lock expired cannot overwrite a newer execution's committed state.
  */
 public final class RedisToolExecutionStore implements ToolExecutionStore {
     public static final String DEFAULT_KEY_PREFIX = "toolguard:exec:";
@@ -30,6 +35,13 @@ public final class RedisToolExecutionStore implements ToolExecutionStore {
     public static final Duration DEFAULT_STATE_TTL = Duration.ofHours(24);
 
     private static final long POLL_INTERVAL_MS = 20L;
+    private static final DefaultRedisScript<Long> FENCED_SET_SCRIPT = new DefaultRedisScript<>(
+        "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            + "redis.call('set', KEYS[2], ARGV[2], 'PX', tonumber(ARGV[3])) "
+            + "return 1 "
+            + "else return 0 end",
+        Long.class
+    );
     private static final DefaultRedisScript<Long> UNLOCK_SCRIPT = new DefaultRedisScript<>(
         "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
         Long.class
@@ -73,9 +85,9 @@ public final class RedisToolExecutionStore implements ToolExecutionStore {
         Objects.requireNonNull(payloadDigest, "payloadDigest");
         Objects.requireNonNull(action, "action");
 
-        String compositeKey = scopeKey + "::" + toolName + "::" + requestId;
-        String stateKey = keyPrefix + compositeKey;
-        String lockKey = keyPrefix + "lock:" + compositeKey;
+        String keyHash = compositeKeyHash(scopeKey, toolName, requestId);
+        String stateKey = keyPrefix + "state:" + keyHash;
+        String lockKey = keyPrefix + "lock:" + keyHash;
         String lockToken = UUID.randomUUID().toString();
 
         if (!acquireLock(lockKey, lockToken)) {
@@ -98,16 +110,34 @@ public final class RedisToolExecutionStore implements ToolExecutionStore {
                     return existing.toOutcome(requestId, true);
                 }
             } else {
-                writeState(stateKey, payloadDigest, ToolExecutionOutcome.pending(requestId, "Execution in progress"));
+                boolean written = writeStateFenced(
+                    lockKey,
+                    stateKey,
+                    lockToken,
+                    payloadDigest,
+                    ToolExecutionOutcome.pending(requestId, "Execution in progress")
+                );
+                if (!written) {
+                    return ToolExecutionOutcome.pending(
+                        requestId,
+                        "Distributed execution lock expired before execution started"
+                    );
+                }
             }
 
             try {
                 ToolExecutionOutcome result = Objects.requireNonNull(action.get(), "tool action returned null");
-                writeState(stateKey, payloadDigest, result);
+                boolean committed = writeStateFenced(lockKey, stateKey, lockToken, payloadDigest, result);
+                if (!committed) {
+                    return ToolExecutionOutcome.pending(
+                        requestId,
+                        "Distributed execution lock expired before state commit; verify downstream state before retrying"
+                    );
+                }
                 return result;
             } catch (UncertainExecutionException uncertain) {
                 ToolExecutionOutcome pending = ToolExecutionOutcome.pending(requestId, uncertain.getMessage());
-                writeState(stateKey, payloadDigest, pending);
+                writeStateFenced(lockKey, stateKey, lockToken, payloadDigest, pending);
                 return pending;
             }
         } finally {
@@ -119,12 +149,22 @@ public final class RedisToolExecutionStore implements ToolExecutionStore {
         Objects.requireNonNull(scopeKey, "scopeKey");
         Objects.requireNonNull(toolName, "toolName");
         Objects.requireNonNull(requestId, "requestId");
-        String stateKey = keyPrefix + scopeKey + "::" + toolName + "::" + requestId;
+        String stateKey = keyPrefix + "state:" + compositeKeyHash(scopeKey, toolName, requestId);
         String raw = redisTemplate.opsForValue().get(stateKey);
         if (raw == null) {
             return Optional.empty();
         }
         return Optional.of(deserialize(raw).toOutcome(requestId, false));
+    }
+
+    static String compositeKeyHash(String scopeKey, String toolName, String requestId) {
+        String canonical = CanonicalJson.stringify(List.of(scopeKey, toolName, requestId));
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(canonical.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
     }
 
     private boolean acquireLock(String lockKey, String lockToken) {
@@ -150,7 +190,13 @@ public final class RedisToolExecutionStore implements ToolExecutionStore {
         redisTemplate.execute(UNLOCK_SCRIPT, List.of(lockKey), lockToken);
     }
 
-    private void writeState(String stateKey, String payloadDigest, ToolExecutionOutcome outcome) {
+    private boolean writeStateFenced(
+        String lockKey,
+        String stateKey,
+        String lockToken,
+        String payloadDigest,
+        ToolExecutionOutcome outcome
+    ) {
         Map<String, Object> record = new LinkedHashMap<>();
         record.put("payloadDigest", payloadDigest);
         record.put("status", outcome.status().name());
@@ -158,7 +204,14 @@ public final class RedisToolExecutionStore implements ToolExecutionStore {
         record.put("rejectionCode", outcome.rejectionCode());
         record.put("message", outcome.message());
         record.put("facts", outcome.facts());
-        redisTemplate.opsForValue().set(stateKey, CanonicalJson.stringify(record), stateTtl);
+        Long result = redisTemplate.execute(
+            FENCED_SET_SCRIPT,
+            List.of(lockKey, stateKey),
+            lockToken,
+            CanonicalJson.stringify(record),
+            String.valueOf(stateTtl.toMillis())
+        );
+        return Long.valueOf(1L).equals(result);
     }
 
     @SuppressWarnings("unchecked")

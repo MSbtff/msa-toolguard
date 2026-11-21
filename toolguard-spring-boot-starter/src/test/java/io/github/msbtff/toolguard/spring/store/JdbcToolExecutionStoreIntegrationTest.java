@@ -9,17 +9,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import io.github.msbtff.toolguard.core.AccessLevel;
+import io.github.msbtff.toolguard.core.AgentOutput;
 import io.github.msbtff.toolguard.core.GuardrailException;
+import io.github.msbtff.toolguard.core.OutputVerifier;
 import io.github.msbtff.toolguard.core.ToolExecutionOutcome;
 import io.github.msbtff.toolguard.core.ToolExecutionStatus;
 import io.github.msbtff.toolguard.core.ToolExecutionStore;
 import io.github.msbtff.toolguard.core.ToolPolicy;
 import io.github.msbtff.toolguard.core.ToolSession;
 import io.github.msbtff.toolguard.core.UncertainExecutionException;
+import io.github.msbtff.toolguard.core.VerificationResult;
 import io.github.msbtff.toolguard.core.ViolationCode;
 import io.github.msbtff.toolguard.spring.ToolGuardAutoConfiguration;
 import io.github.msbtff.toolguard.spring.ToolSessionFactory;
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -143,7 +149,8 @@ class JdbcToolExecutionStoreIntegrationTest {
         assertEquals(8801L, completed.facts().get("movementId"));
         assertEquals(2, downstreamCalls.get());
 
-        // Process 3 (another restart): replays persisted COMPLETED outcome without invoking handler
+        // Process 3 (another restart): replays persisted COMPLETED outcome without invoking handler,
+        // synchronizes EvidenceLedger, and satisfies downstream requires + OutputVerifier
         JdbcToolExecutionStore storeThirdBoot = new JdbcToolExecutionStore(dataSource);
         ToolSession session3 = ToolSession.builder()
             .scopeKey("account-jdbc-1")
@@ -153,6 +160,10 @@ class JdbcToolExecutionStoreIntegrationTest {
                 downstreamCalls.incrementAndGet();
                 throw new AssertionError("Downstream must not be invoked on durable replay");
             })
+            .registerTool(
+                ToolPolicy.builder("confirm_settlement").requires("retry_disposal").maxCalls(1).build(),
+                args -> ToolExecutionOutcome.completed(Map.of("confirmed", true))
+            )
             .build();
 
         ToolExecutionOutcome replayed = session3.execute(
@@ -166,6 +177,51 @@ class JdbcToolExecutionStoreIntegrationTest {
         assertEquals(8801L, replayed.facts().get("movementId"));
         assertEquals(17L, replayed.facts().get("quantityAfter"));
         assertEquals(2, downstreamCalls.get());
+        assertTrue(session3.evidenceLedger().hasCompletedTool("retry_disposal"));
+
+        ToolExecutionOutcome confirmed = session3.execute("confirm_settlement", Map.of());
+        assertEquals(ToolExecutionStatus.COMPLETED, confirmed.status());
+        VerificationResult verified = OutputVerifier.builder()
+            .requireToolExecuted("retry_disposal")
+            .requireToolExecuted("confirm_settlement")
+            .build()
+            .verify(new AgentOutput("confirmed", List.of(replayed.evidenceId(), confirmed.evidenceId()), Map.of()), session3.evidenceLedger());
+        assertTrue(verified.verified());
+    }
+
+    @Test
+    void purgeTerminalBeforeRemovesOldCompletedRowsWhilePreservingPendingRows() {
+        Instant t0 = Instant.parse("2026-11-01T00:00:00Z");
+        JdbcToolExecutionStore store = new JdbcToolExecutionStore(
+            dataSource,
+            "toolguard_purge_test",
+            Clock.fixed(t0, ZoneOffset.UTC),
+            true,
+            Duration.ofSeconds(5)
+        );
+        ToolSession session = ToolSession.builder()
+            .scopeKey("acct-purge")
+            .maxAccessLevel(AccessLevel.MUTATING)
+            .executionStore(store)
+            .registerTool(
+                ToolPolicy.builder("done_tool").accessLevel(AccessLevel.MUTATING).build(),
+                args -> ToolExecutionOutcome.completed(Map.of("ok", true))
+            )
+            .registerTool(
+                ToolPolicy.builder("pending_tool").accessLevel(AccessLevel.MUTATING).build(),
+                args -> {
+                    throw new UncertainExecutionException("still uncertain");
+                }
+            )
+            .build();
+
+        session.execute("done_tool", Map.of(), "req-done");
+        session.execute("pending_tool", Map.of(), "req-pending");
+
+        int purged = store.purgeTerminalBefore(t0.plus(Duration.ofHours(1)));
+        assertEquals(1, purged);
+        assertTrue(store.find("acct-purge", "done_tool", "req-done").isEmpty());
+        assertEquals(ToolExecutionStatus.PENDING, store.find("acct-purge", "pending_tool", "req-pending").orElseThrow().status());
     }
 
     @Test

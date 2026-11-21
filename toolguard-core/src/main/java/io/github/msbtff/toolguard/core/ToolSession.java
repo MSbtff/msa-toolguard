@@ -64,6 +64,8 @@ public final class ToolSession {
     public ToolExecutionOutcome execute(String toolName, Map<String, Object> rawArguments, String requestId) {
         long startNanos = System.nanoTime();
         String safeToolName = toolName == null ? "" : toolName;
+        ToolPolicy policy = null;
+        boolean budgetReserved = false;
         try {
             RegisteredTool registered = tools.get(safeToolName);
             if (registered == null) {
@@ -71,7 +73,7 @@ public final class ToolSession {
                     "Tool '" + safeToolName + "' is not registered in this session",
                     "Call only registered tools: " + tools.keySet());
             }
-            ToolPolicy policy = registered.policy();
+            policy = registered.policy();
 
             if (policy.accessLevel() == AccessLevel.MUTATING && maxAccessLevel == AccessLevel.READ_ONLY) {
                 throw deny(ViolationCode.ACCESS_DENIED, safeToolName,
@@ -100,7 +102,9 @@ public final class ToolSession {
             String normalizedRequestId = normalizeRequestId(policy, requestId);
 
             checkAndIncrementBudgets(policy);
+            budgetReserved = true;
 
+            ToolPolicy activePolicy = policy;
             ToolExecutionOutcome outcome;
             if (normalizedRequestId != null) {
                 String payloadDigest = CanonicalDigest.sha256(resolvedArgs);
@@ -109,10 +113,21 @@ public final class ToolSession {
                     safeToolName,
                     normalizedRequestId,
                     payloadDigest,
-                    () -> invokeAndRecord(policy, registered.handler(), resolvedArgs, normalizedRequestId)
+                    () -> invokeAndRecord(activePolicy, registered.handler(), resolvedArgs, normalizedRequestId)
                 );
+                if (outcome.replayed() || outcome.evidenceId() == null) {
+                    EvidenceRecord synced = evidenceLedger.recordReplayed(
+                        outcome.evidenceId(),
+                        activePolicy.evidencePrefix(),
+                        activePolicy.name(),
+                        outcome.status(),
+                        normalizedRequestId,
+                        outcome.facts()
+                    );
+                    outcome = outcome.withEvidence(synced.evidenceId(), normalizedRequestId);
+                }
             } else {
-                outcome = invokeAndRecord(policy, registered.handler(), resolvedArgs, null);
+                outcome = invokeAndRecord(activePolicy, registered.handler(), resolvedArgs, null);
             }
 
             listener.onEvent(new ToolExecutionEvent(
@@ -126,6 +141,9 @@ public final class ToolSession {
             ));
             return outcome;
         } catch (GuardrailException blocked) {
+            if (budgetReserved && policy != null) {
+                releaseBudget(policy);
+            }
             listener.onEvent(new ToolExecutionEvent(
                 sessionId,
                 safeToolName,
@@ -136,6 +154,21 @@ public final class ToolSession {
                 Duration.ofNanos(System.nanoTime() - startNanos)
             ));
             throw blocked;
+        } catch (RuntimeException | Error unexpected) {
+            try {
+                listener.onEvent(new ToolExecutionEvent(
+                    sessionId,
+                    safeToolName,
+                    true,
+                    null,
+                    null,
+                    false,
+                    Duration.ofNanos(System.nanoTime() - startNanos)
+                ));
+            } catch (RuntimeException listenerError) {
+                unexpected.addSuppressed(listenerError);
+            }
+            throw unexpected;
         }
     }
 
@@ -217,6 +250,16 @@ public final class ToolSession {
         }
         totalCalls.incrementAndGet();
         perTool.incrementAndGet();
+    }
+
+    private synchronized void releaseBudget(ToolPolicy policy) {
+        if (totalCalls.get() > 0) {
+            totalCalls.decrementAndGet();
+        }
+        AtomicInteger perTool = toolCalls.get(policy.name());
+        if (perTool != null && perTool.get() > 0) {
+            perTool.decrementAndGet();
+        }
     }
 
     private GuardrailException deny(ViolationCode code, String toolName, String message, String repairHint) {

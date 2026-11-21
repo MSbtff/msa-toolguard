@@ -13,8 +13,11 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.SQLIntegrityConstraintViolationException;
+import java.sql.SQLTimeoutException;
 import java.sql.Statement;
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -23,20 +26,22 @@ import java.util.regex.Pattern;
 import javax.sql.DataSource;
 
 /**
- * JDBC-backed durable {@link ToolExecutionStore} with database row locking ({@code SELECT ... FOR UPDATE})
- * and restart-safe {@code PENDING}/{@code COMPLETED}/{@code REJECTED} state persistence.
- * Compatible with PostgreSQL, MariaDB/MySQL, and H2.
+ * JDBC-backed durable {@link ToolExecutionStore} with bounded database row locking ({@code SELECT ... FOR UPDATE}),
+ * query timeouts, terminal-row retention cleanup, and restart-safe {@code PENDING}/{@code COMPLETED}/{@code REJECTED}
+ * state persistence. Compatible with PostgreSQL, MariaDB/MySQL, and H2.
  */
 public final class JdbcToolExecutionStore implements ToolExecutionStore {
     public static final String DEFAULT_TABLE_NAME = "toolguard_executions";
+    public static final Duration DEFAULT_LOCK_TIMEOUT = Duration.ofSeconds(10);
     private static final Pattern SAFE_IDENTIFIER = Pattern.compile("^[A-Za-z_][A-Za-z0-9_]*$");
 
     private final DataSource dataSource;
     private final String tableName;
     private final Clock clock;
+    private final int queryTimeoutSeconds;
 
     public JdbcToolExecutionStore(DataSource dataSource) {
-        this(dataSource, DEFAULT_TABLE_NAME, Clock.systemUTC(), true);
+        this(dataSource, DEFAULT_TABLE_NAME, Clock.systemUTC(), true, DEFAULT_LOCK_TIMEOUT);
     }
 
     public JdbcToolExecutionStore(
@@ -45,9 +50,20 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
         Clock clock,
         boolean initializeSchema
     ) {
+        this(dataSource, tableName, clock, initializeSchema, DEFAULT_LOCK_TIMEOUT);
+    }
+
+    public JdbcToolExecutionStore(
+        DataSource dataSource,
+        String tableName,
+        Clock clock,
+        boolean initializeSchema,
+        Duration lockTimeout
+    ) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.tableName = validateTableName(tableName);
         this.clock = Objects.requireNonNull(clock, "clock");
+        this.queryTimeoutSeconds = toQueryTimeoutSeconds(lockTimeout);
         if (initializeSchema) {
             initializeSchema();
         }
@@ -97,7 +113,16 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
             boolean previousAutoCommit = conn.getAutoCommit();
             conn.setAutoCommit(false);
             try {
-                RowState row = lockRow(conn, scopeKey, toolName, requestId);
+                RowState row;
+                try {
+                    row = lockRow(conn, scopeKey, toolName, requestId);
+                } catch (SQLException lockFailure) {
+                    if (isLockTimeout(lockFailure)) {
+                        rollbackQuietly(conn);
+                        return ToolExecutionOutcome.pending(requestId, "Timed out waiting for JDBC execution lock");
+                    }
+                    throw lockFailure;
+                }
                 if (!row.payloadDigest().equals(payloadDigest)) {
                     rollbackQuietly(conn);
                     throw new GuardrailException(new GuardrailViolation(
@@ -141,6 +166,7 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
         String sql = "SELECT payload_digest, status, evidence_id, rejection_code, message, facts_json FROM "
             + tableName + " WHERE scope_key = ? AND tool_name = ? AND request_id = ?";
         try (Connection conn = dataSource.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setQueryTimeout(queryTimeoutSeconds);
             ps.setString(1, scopeKey);
             ps.setString(2, toolName);
             ps.setString(3, requestId);
@@ -152,6 +178,23 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
             }
         } catch (SQLException e) {
             throw new IllegalStateException("Failed to read toolguard execution row", e);
+        }
+    }
+
+    /**
+     * Removes terminal ({@code COMPLETED} / {@code REJECTED}) records updated before {@code cutoff}.
+     * Active {@code PENDING} rows are never purged so uncertain executions cannot lose idempotency protection.
+     */
+    public int purgeTerminalBefore(Instant cutoff) {
+        Objects.requireNonNull(cutoff, "cutoff");
+        String sql = "DELETE FROM " + tableName + " WHERE status <> ? AND updated_at_ms < ?";
+        try (Connection conn = dataSource.getConnection(); PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setQueryTimeout(queryTimeoutSeconds);
+            ps.setString(1, ToolExecutionStatus.PENDING.name());
+            ps.setLong(2, cutoff.toEpochMilli());
+            return ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("Failed to purge expired toolguard execution rows", e);
         }
     }
 
@@ -169,6 +212,7 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
             boolean previousAutoCommit = conn.getAutoCommit();
             conn.setAutoCommit(true);
             try (PreparedStatement ps = conn.prepareStatement(sql)) {
+                ps.setQueryTimeout(queryTimeoutSeconds);
                 ps.setString(1, scopeKey);
                 ps.setString(2, toolName);
                 ps.setString(3, requestId);
@@ -195,6 +239,7 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
         String sql = "SELECT payload_digest, status, evidence_id, rejection_code, message, facts_json FROM "
             + tableName + " WHERE scope_key = ? AND tool_name = ? AND request_id = ? FOR UPDATE";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setQueryTimeout(queryTimeoutSeconds);
             ps.setString(1, scopeKey);
             ps.setString(2, toolName);
             ps.setString(3, requestId);
@@ -218,6 +263,7 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
             + " SET status = ?, evidence_id = ?, rejection_code = ?, message = ?, facts_json = ?, updated_at_ms = ?"
             + " WHERE scope_key = ? AND tool_name = ? AND request_id = ?";
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setQueryTimeout(queryTimeoutSeconds);
             ps.setString(1, outcome.status().name());
             ps.setString(2, outcome.evidenceId());
             ps.setString(3, outcome.rejectionCode());
@@ -250,6 +296,33 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
         }
         String state = ex.getSQLState();
         return state != null && state.startsWith("23");
+    }
+
+    static boolean isLockTimeout(SQLException ex) {
+        SQLException current = ex;
+        while (current != null) {
+            if (current instanceof SQLTimeoutException) {
+                return true;
+            }
+            String state = current.getSQLState();
+            if ("57014".equals(state) || "55P03".equals(state) || "HYT00".equals(state)) {
+                return true;
+            }
+            if (current.getErrorCode() == 1205) {
+                return true;
+            }
+            current = current.getNextException();
+        }
+        return false;
+    }
+
+    private static int toQueryTimeoutSeconds(Duration lockTimeout) {
+        Objects.requireNonNull(lockTimeout, "lockTimeout");
+        if (lockTimeout.isZero() || lockTimeout.isNegative()) {
+            throw new IllegalArgumentException("lockTimeout must be positive");
+        }
+        long seconds = (lockTimeout.toMillis() + 999L) / 1000L;
+        return (int) Math.min(Math.max(seconds, 1L), Integer.MAX_VALUE);
     }
 
     private static String validateTableName(String tableName) {
