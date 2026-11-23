@@ -12,6 +12,7 @@ public class ToolGuardProperties {
     private boolean enabled = true;
     private int defaultMaxTotalCalls = 50;
     private AccessLevel defaultAccessLevel = AccessLevel.READ_ONLY;
+    private Duration defaultSessionTimeout;
     private StoreProperties store = new StoreProperties();
     private AuditProperties audit = new AuditProperties();
 
@@ -37,6 +38,14 @@ public class ToolGuardProperties {
 
     public void setDefaultAccessLevel(AccessLevel defaultAccessLevel) {
         this.defaultAccessLevel = defaultAccessLevel;
+    }
+
+    public Duration getDefaultSessionTimeout() {
+        return defaultSessionTimeout;
+    }
+
+    public void setDefaultSessionTimeout(Duration defaultSessionTimeout) {
+        this.defaultSessionTimeout = defaultSessionTimeout;
     }
 
     public StoreProperties getStore() {

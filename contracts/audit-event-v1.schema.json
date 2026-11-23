@@ -31,6 +31,8 @@
         "POLICY_DENIED",
         "MISSING_IDEMPOTENCY_KEY",
         "IDEMPOTENCY_CONFLICT",
+        "APPROVAL_REQUIRED",
+        "SESSION_TIMEOUT",
         null
       ]
     },
