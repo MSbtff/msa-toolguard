@@ -12,3 +12,6 @@ CREATE TABLE IF NOT EXISTS toolguard_executions (
     updated_at_ms   BIGINT       NOT NULL,
     PRIMARY KEY (scope_key, tool_name, request_id)
 );
+
+CREATE INDEX IF NOT EXISTS idx_toolguard_executions_status_updated
+    ON toolguard_executions (status, updated_at_ms);

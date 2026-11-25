@@ -35,6 +35,23 @@ class StoreSafetyUnitTest {
     }
 
     @Test
+    void jdbcPurgeIndexNameRespectsMaxIdentifierLengthAndDetectsDuplicateIndexErrors() {
+        assertEquals(
+            "idx_toolguard_executions_status_updated",
+            JdbcToolExecutionStore.purgeIndexName("toolguard_executions")
+        );
+        String longTable = "a".repeat(60);
+        String longIndex = JdbcToolExecutionStore.purgeIndexName(longTable);
+        assertEquals(63, longIndex.length());
+        assertTrue(longIndex.endsWith("_status_updated"));
+
+        assertTrue(JdbcToolExecutionStore.isDuplicateIndex(new SQLException("already exists", "42P07")));
+        assertTrue(JdbcToolExecutionStore.isDuplicateIndex(new SQLException("already exists", "42S11")));
+        assertTrue(JdbcToolExecutionStore.isDuplicateIndex(new SQLException("dup key name", "42000", 1061)));
+        assertFalse(JdbcToolExecutionStore.isDuplicateIndex(new SQLException("syntax error", "42601")));
+    }
+
+    @Test
     void storePropertiesExposeBoundedInMemoryAndJdbcLockTimeoutDefaults() {
         ToolGuardProperties props = new ToolGuardProperties();
         assertEquals(10_000, props.getStore().getInMemory().getMaxEntries());
