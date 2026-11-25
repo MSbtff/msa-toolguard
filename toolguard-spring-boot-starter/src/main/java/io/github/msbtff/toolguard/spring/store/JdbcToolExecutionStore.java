@@ -88,9 +88,54 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
             """.formatted(tableName);
         try (Connection conn = dataSource.getConnection(); Statement stmt = conn.createStatement()) {
             stmt.execute(ddl);
+            ensurePurgeIndex(stmt);
         } catch (SQLException e) {
             throw new IllegalStateException("Failed to initialize toolguard JDBC table '" + tableName + "'", e);
         }
+    }
+
+    private void ensurePurgeIndex(Statement stmt) throws SQLException {
+        String indexName = purgeIndexName(tableName);
+        String ifNotExistsSql = "CREATE INDEX IF NOT EXISTS " + indexName
+            + " ON " + tableName + " (status, updated_at_ms)";
+        try {
+            stmt.execute(ifNotExistsSql);
+        } catch (SQLException ex) {
+            if (isDuplicateIndex(ex)) {
+                return;
+            }
+            // Fallback for databases such as MySQL 8 that do not accept CREATE INDEX IF NOT EXISTS
+            String plainSql = "CREATE INDEX " + indexName + " ON " + tableName + " (status, updated_at_ms)";
+            try {
+                stmt.execute(plainSql);
+            } catch (SQLException fallbackEx) {
+                if (!isDuplicateIndex(fallbackEx)) {
+                    throw fallbackEx;
+                }
+            }
+        }
+    }
+
+    static String purgeIndexName(String tableName) {
+        String candidate = "idx_" + tableName + "_status_updated";
+        if (candidate.length() <= 63) {
+            return candidate;
+        }
+        String suffix = "_status_updated";
+        int maxPrefix = 63 - suffix.length();
+        return ("idx_" + tableName).substring(0, maxPrefix) + suffix;
+    }
+
+    static boolean isDuplicateIndex(SQLException ex) {
+        SQLException current = ex;
+        while (current != null) {
+            String state = current.getSQLState();
+            if ("42P07".equals(state) || "42S11".equals(state) || current.getErrorCode() == 1061) {
+                return true;
+            }
+            current = current.getNextException();
+        }
+        return false;
     }
 
     @Override

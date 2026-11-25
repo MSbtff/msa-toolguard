@@ -4,14 +4,17 @@ import io.github.msbtff.toolguard.core.AccessLevel;
 import io.github.msbtff.toolguard.core.AgentOutput;
 import io.github.msbtff.toolguard.core.AuditTrailListener;
 import io.github.msbtff.toolguard.core.DenyRules;
+import io.github.msbtff.toolguard.core.GuardrailException;
+import io.github.msbtff.toolguard.core.GuardrailViolation;
+import io.github.msbtff.toolguard.core.InMemoryApprovalGate;
 import io.github.msbtff.toolguard.core.InMemoryToolExecutionStore;
 import io.github.msbtff.toolguard.core.OutputVerifier;
 import io.github.msbtff.toolguard.core.ToolExecutionOutcome;
 import io.github.msbtff.toolguard.core.ToolPolicy;
 import io.github.msbtff.toolguard.core.ToolSession;
-import io.github.msbtff.toolguard.core.UncertainExecutionException;
 import io.github.msbtff.toolguard.core.VerifiedAgentRunner;
 import io.github.msbtff.toolguard.core.VerifiedRunResult;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -19,13 +22,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Standalone runnable sample demonstrating deterministic tool guardrails,
- * EvidenceLedger + VerifiedAgentRunner auto-repair, idempotent PENDING recovery,
+ * EvidenceLedger + VerifiedAgentRunner auto-repair, payload-bound HITL ApprovalGate,
+ * Java 21 virtual-thread execution timeout -> PENDING recovery, idempotent replay,
  * and redacted Markdown audit reporting without requiring ErpMSA or an LLM API key.
  */
 public final class DisposalGuardSample {
 
     public record SampleReport(
         VerifiedRunResult investigation,
+        GuardrailViolation approvalBlocked,
         ToolExecutionOutcome retryPending,
         ToolExecutionOutcome retryCompleted,
         ToolExecutionOutcome retryReplayed,
@@ -35,6 +40,7 @@ public final class DisposalGuardSample {
     public static SampleReport runDemo() {
         AuditTrailListener auditTrail = new AuditTrailListener();
         InMemoryToolExecutionStore store = new InMemoryToolExecutionStore();
+        InMemoryApprovalGate approvalGate = new InMemoryApprovalGate();
         AtomicInteger stockCalls = new AtomicInteger(0);
 
         ToolPolicy detailPolicy = ToolPolicy.builder("get_disposal")
@@ -58,6 +64,8 @@ public final class DisposalGuardSample {
             .requires("get_disposal")
             .boundParameters("accountId", "disposalId")
             .requireIdempotencyKey(true)
+            .requireApproval(true)
+            .executionTimeout(Duration.ofMillis(120))
             .build();
 
         ToolSession session = ToolSession.builder()
@@ -65,7 +73,9 @@ public final class DisposalGuardSample {
             .scopeKey("sample-account-7")
             .maxAccessLevel(AccessLevel.MUTATING)
             .maxTotalCalls(10)
+            .sessionTimeout(Duration.ofSeconds(30))
             .executionStore(store)
+            .approvalGate(approvalGate)
             .listener(auditTrail)
             .bindParameter("accountId", 7L)
             .bindParameter("disposalId", "disp-sample-001")
@@ -82,7 +92,12 @@ public final class DisposalGuardSample {
             )))
             .registerTool(retryPolicy, args -> {
                 if (stockCalls.incrementAndGet() == 1) {
-                    throw new UncertainExecutionException("Lost downstream response");
+                    try {
+                        // Simulate hung downstream call exceeding executionTimeout(120ms) -> auto PENDING
+                        Thread.sleep(1000);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
                 }
                 return ToolExecutionOutcome.completed(Map.of("movementId", 9001L, "quantityAfter", 17L));
             })
@@ -111,6 +126,25 @@ public final class DisposalGuardSample {
             return new AgentOutput("matched", s.evidenceLedger().allIds(), Map.of("movementId", 9001L));
         });
 
+        // 1. High-risk mutation blocked before operator approval (APPROVAL_REQUIRED)
+        GuardrailViolation approvalBlocked;
+        try {
+            session.execute("retry_disposal", Map.of("mode", "safe"), "req-sample-1");
+            throw new IllegalStateException("Expected APPROVAL_REQUIRED before approval grant");
+        } catch (GuardrailException blocked) {
+            approvalBlocked = blocked.violation();
+        }
+
+        // 2. Operator grants one-time approval strictly bound to resolved arguments digest
+        approvalGate.grant(
+            "sample-account-7",
+            "retry_disposal",
+            Map.of("accountId", 7L, "disposalId", "disp-sample-001", "mode", "safe"),
+            "ops-lead@company.com",
+            Duration.ofMinutes(5)
+        );
+
+        // 3. First attempt exceeds executionTimeout(120ms) -> PENDING; retry completes; third replays
         ToolExecutionOutcome pending = session.execute("retry_disposal", Map.of("mode", "safe"), "req-sample-1");
         ToolExecutionOutcome completed = session.execute("retry_disposal", Map.of("mode", "safe"), "req-sample-1");
         ToolExecutionOutcome replayed = session.execute("retry_disposal", Map.of("mode", "safe"), "req-sample-1");
@@ -120,7 +154,7 @@ public final class DisposalGuardSample {
             session.evidenceLedger(),
             investigation.verification()
         );
-        return new SampleReport(investigation, pending, completed, replayed, markdown);
+        return new SampleReport(investigation, approvalBlocked, pending, completed, replayed, markdown);
     }
 
     public static void main(String[] args) {

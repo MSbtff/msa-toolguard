@@ -222,6 +222,22 @@ class JdbcToolExecutionStoreIntegrationTest {
         assertEquals(1, purged);
         assertTrue(store.find("acct-purge", "done_tool", "req-done").isEmpty());
         assertEquals(ToolExecutionStatus.PENDING, store.find("acct-purge", "pending_tool", "req-pending").orElseThrow().status());
+
+        // Calling initializeSchema() again is idempotent and purge index exists on PostgreSQL
+        store.initializeSchema();
+        try (var conn = dataSource.getConnection();
+             var rs = conn.getMetaData().getIndexInfo(null, null, "toolguard_purge_test", false, false)) {
+            boolean foundPurgeIndex = false;
+            while (rs.next()) {
+                if ("idx_toolguard_purge_test_status_updated".equalsIgnoreCase(rs.getString("INDEX_NAME"))) {
+                    foundPurgeIndex = true;
+                    break;
+                }
+            }
+            assertTrue(foundPurgeIndex, "Expected purge index idx_toolguard_purge_test_status_updated to exist");
+        } catch (Exception e) {
+            throw new AssertionError("Failed to verify JDBC purge index metadata", e);
+        }
     }
 
     @Test
