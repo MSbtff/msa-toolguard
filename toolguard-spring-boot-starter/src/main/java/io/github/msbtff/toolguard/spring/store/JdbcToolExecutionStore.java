@@ -152,7 +152,9 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
         Objects.requireNonNull(payloadDigest, "payloadDigest");
         Objects.requireNonNull(action, "action");
 
-        ensurePendingRowExists(scopeKey, toolName, requestId, payloadDigest);
+        if (!ensurePendingRowExists(scopeKey, toolName, requestId, payloadDigest)) {
+            return ToolExecutionOutcome.pending(requestId, "Timed out waiting for JDBC execution lock");
+        }
 
         try (Connection conn = dataSource.getConnection()) {
             boolean previousAutoCommit = conn.getAutoCommit();
@@ -243,7 +245,7 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
         }
     }
 
-    private void ensurePendingRowExists(
+    private boolean ensurePendingRowExists(
         String scopeKey,
         String toolName,
         String requestId,
@@ -268,10 +270,15 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
                 ps.setLong(8, now);
                 ps.setLong(9, now);
                 ps.executeUpdate();
+                return true;
             } catch (SQLException ex) {
-                if (!isDuplicateKey(ex)) {
-                    throw ex;
+                if (isDuplicateKey(ex)) {
+                    return true;
                 }
+                if (isLockTimeout(ex)) {
+                    return false;
+                }
+                throw ex;
             } finally {
                 restoreAutoCommitQuietly(conn, previousAutoCommit);
             }
@@ -350,10 +357,11 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
                 return true;
             }
             String state = current.getSQLState();
-            if ("57014".equals(state) || "55P03".equals(state) || "HYT00".equals(state)) {
+            if ("57014".equals(state) || "55P03".equals(state) || "HYT00".equals(state) || "70100".equals(state)) {
                 return true;
             }
-            if (current.getErrorCode() == 1205) {
+            int code = current.getErrorCode();
+            if (code == 1205 || code == 1969 || code == 3024 || code == 3572) {
                 return true;
             }
             current = current.getNextException();
