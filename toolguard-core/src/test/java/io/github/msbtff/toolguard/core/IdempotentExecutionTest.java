@@ -5,11 +5,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
@@ -113,5 +117,94 @@ class IdempotentExecutionTest {
             assertTrue(o1.replayed() ^ o2.replayed());
             assertEquals(o1.evidenceId(), o2.evidenceId());
         }
+    }
+
+    @Test
+    void enforcesZeroDuplicateMutationsAndStrictBudgetUnder32ThreadConcurrency() throws Exception {
+        int threads = 32;
+        AtomicInteger mutations = new AtomicInteger(0);
+        InMemoryToolExecutionStore store = new InMemoryToolExecutionStore();
+        ToolPolicy mutatePolicy = ToolPolicy.builder("retry_disposal")
+            .accessLevel(AccessLevel.MUTATING)
+            .maxCalls(threads)
+            .build();
+
+        CyclicBarrier idempBarrier = new CyclicBarrier(threads);
+        try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
+            List<Future<ToolExecutionOutcome>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                futures.add(pool.submit(() -> {
+                    ToolSession session = ToolSession.builder()
+                        .scopeKey("acct-stress-32")
+                        .maxAccessLevel(AccessLevel.MUTATING)
+                        .executionStore(store)
+                        .registerTool(mutatePolicy, args -> {
+                            mutations.incrementAndGet();
+                            try {
+                                Thread.sleep(40);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            }
+                            return ToolExecutionOutcome.completed(Map.of("movementId", 3201L));
+                        })
+                        .build();
+                    idempBarrier.await(10, TimeUnit.SECONDS);
+                    return session.execute("retry_disposal", Map.of("disposalId", "disp-32"), "req-stress-32");
+                }));
+            }
+
+            int fresh = 0;
+            int replayed = 0;
+            for (Future<ToolExecutionOutcome> f : futures) {
+                ToolExecutionOutcome outcome = f.get(15, TimeUnit.SECONDS);
+                assertEquals(ToolExecutionStatus.COMPLETED, outcome.status());
+                assertEquals(3201L, outcome.facts().get("movementId"));
+                if (outcome.replayed()) {
+                    replayed++;
+                } else {
+                    fresh++;
+                }
+            }
+            assertEquals(1, mutations.get());
+            assertEquals(1, fresh);
+            assertEquals(threads - 1, replayed);
+        }
+
+        // 32 concurrent callers racing against maxTotalCalls=10 -> exactly 10 allowed, 22 blocked
+        AtomicInteger allowedReads = new AtomicInteger(0);
+        AtomicInteger budgetBlocked = new AtomicInteger(0);
+        ToolSession sharedSession = ToolSession.builder()
+            .maxTotalCalls(10)
+            .registerTool(
+                ToolPolicy.builder("read_item").maxCalls(20).build(),
+                args -> ToolExecutionOutcome.completed(Map.of("n", args.get("n")))
+            )
+            .build();
+
+        CyclicBarrier budgetBarrier = new CyclicBarrier(threads);
+        try (ExecutorService pool = Executors.newFixedThreadPool(threads)) {
+            List<Future<?>> futures = new ArrayList<>();
+            for (int i = 0; i < threads; i++) {
+                int idx = i;
+                futures.add(pool.submit(() -> {
+                    try {
+                        budgetBarrier.await(10, TimeUnit.SECONDS);
+                        sharedSession.execute("read_item", Map.of("n", idx));
+                        allowedReads.incrementAndGet();
+                    } catch (GuardrailException blocked) {
+                        assertEquals(ViolationCode.CALL_BUDGET_EXCEEDED, blocked.violation().code());
+                        budgetBlocked.incrementAndGet();
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                }));
+            }
+            for (Future<?> f : futures) {
+                f.get(15, TimeUnit.SECONDS);
+            }
+        }
+        assertEquals(10, allowedReads.get());
+        assertEquals(22, budgetBlocked.get());
+        assertEquals(10, sharedSession.totalCallCount());
     }
 }

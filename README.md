@@ -262,7 +262,7 @@ with LoopbackMcpServer.for_session(session, tools) as server:
 
 ### 6. 결정론적 Record/Replay 테스트 (`toolguard-test-fixtures`)
 
-`ToolTranscriptRecorder`로 도구 호출 트랜스크립트를 녹화·재생하고, `GuardrailAssertions`로 `ViolationCode`, 근거 검증 실패, 멱등 재생(`replayed`) 동작을 외부 LLM·네트워크 없이 JUnit 5에서 회귀 검증할 수 있습니다. ([`ReplayHarnessTest.java`](toolguard-test-fixtures/src/test/java/io/github/msbtff/toolguard/testing/ReplayHarnessTest.java))
+`ToolTranscriptRecorder`로 도구 호출 트랜스크립트를 녹화·재생하고, `toJson()`/`fromJson()`/`saveTo()`/`loadFrom()`으로 민감 키(`[REDACTED]`)가 자동 마스킹된 버전드 JSON VCR 카세트를 저장·로드해 외부 LLM·네트워크 없이 JUnit 5 회귀 테스트를 실행할 수 있습니다. `GuardrailAssertions`로 `ViolationCode`, 근거 검증 실패, 멱등 재생(`replayed`) 동작을 단언합니다. ([`ReplayHarnessTest.java`](toolguard-test-fixtures/src/test/java/io/github/msbtff/toolguard/testing/ReplayHarnessTest.java))
 
 ---
 
@@ -281,9 +281,9 @@ with LoopbackMcpServer.for_session(session, tools) as server:
 ## 빌드 및 테스트
 
 ```bash
-./gradlew unitTest                          # 단위 테스트 (JUnit @Tag("unit"))
+./gradlew unitTest                          # 단위 테스트 (JUnit @Tag("unit"), H2 32스레드 동시성 포함)
 ./gradlew jacocoTestCoverageVerification    # JaCoCo 최소 커버리지 게이트 검증 (core LINE 90% / BRANCH 75%)
-./gradlew check                             # 단위·커버리지·samples + PostgreSQL/Redis Testcontainers 통합 테스트
+./gradlew check                             # 단위·커버리지·samples + PostgreSQL/MariaDB/Redis Testcontainers 통합 테스트
 ./gradlew publishToMavenLocal               # 로컬 Maven 배포
 PYTHONPATH=python/src python3 -m unittest discover -s python/tests -v
 python3 -m unittest discover -s .agents/hooks -p 'test_*.py' -v
