@@ -80,7 +80,6 @@ class MariaDbToolExecutionStoreIntegrationTest {
             true,
             Duration.ofSeconds(5)
         );
-        // Re-running initializeSchema is idempotent on MariaDB
         store.initializeSchema();
 
         try (var conn = dataSource.getConnection();
@@ -112,7 +111,6 @@ class MariaDbToolExecutionStoreIntegrationTest {
             .build();
         assertEquals(ToolExecutionStatus.PENDING, s1.execute("retry_disposal", Map.of("qty", 4L), "req-m-1").status());
 
-        // Simulated restart with fresh store & session
         JdbcToolExecutionStore store2 = new JdbcToolExecutionStore(
             dataSource, "toolguard_maria_exec", Clock.fixed(t0, ZoneOffset.UTC), false, Duration.ofSeconds(5)
         );
@@ -136,7 +134,6 @@ class MariaDbToolExecutionStoreIntegrationTest {
         assertEquals(ToolExecutionStatus.COMPLETED, completed.status());
         assertFalse(completed.replayed());
 
-        // Third boot replays without invoking handler and synchronizes EvidenceLedger
         ToolSession s3 = ToolSession.builder()
             .scopeKey("acct-maria-1")
             .maxAccessLevel(AccessLevel.MUTATING)
@@ -161,7 +158,6 @@ class MariaDbToolExecutionStoreIntegrationTest {
             .verify(new AgentOutput("ok", List.of(replayed.evidenceId(), confirmed.evidenceId()), Map.of()), s3.evidenceLedger());
         assertTrue(vr.verified());
 
-        // Purge deletes COMPLETED while preserving PENDING
         store.executeIdempotent(
             "acct-maria-1", "retry_disposal", "req-m-pending", "digest-mp",
             () -> ToolExecutionOutcome.pending("req-m-pending", "waiting")

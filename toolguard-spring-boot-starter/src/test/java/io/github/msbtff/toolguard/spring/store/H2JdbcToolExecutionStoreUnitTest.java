@@ -62,7 +62,6 @@ class H2JdbcToolExecutionStoreUnitTest {
                 true,
                 Duration.ofSeconds(5)
             );
-            // Re-running initializeSchema is idempotent
             store.initializeSchema();
 
             try (var conn = ds.getConnection();
@@ -113,7 +112,6 @@ class H2JdbcToolExecutionStoreUnitTest {
             assertEquals(ToolExecutionStatus.COMPLETED, completed.status());
             assertFalse(completed.replayed());
 
-            // Fresh session replays, syncs EvidenceLedger, satisfies requires + OutputVerifier
             ToolSession s3 = ToolSession.builder()
                 .scopeKey("acct-h2")
                 .maxAccessLevel(AccessLevel.MUTATING)
@@ -136,7 +134,6 @@ class H2JdbcToolExecutionStoreUnitTest {
                 .verify(new AgentOutput("ok", List.of(replayed.evidenceId(), verifiedStep.evidenceId()), Map.of()), s3.evidenceLedger());
             assertTrue(vr.verified());
 
-            // Keep one PENDING row and confirm purgeTerminalBefore deletes only COMPLETED row
             store.executeIdempotent(
                 "acct-h2", "retry_disposal", "req-h2-pending", "digest-p",
                 () -> ToolExecutionOutcome.pending("req-h2-pending", "waiting")

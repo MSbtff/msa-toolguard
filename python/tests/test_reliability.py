@@ -80,7 +80,7 @@ class ReliabilityAndMcpSafetyTest(unittest.TestCase):
         first_replay = s2.execute("retry_disposal", {"id": 2}, request_id="req-py-2")
         self.assertTrue(first_replay.replayed)
         self.assertEqual("E2", first_replay.evidence_id)
-        self.assertEqual("get_disposal", s2.evidence_ledger.find("E1").tool_name)  # type: ignore[union-attr]
+        self.assertEqual("get_disposal", s2.evidence_ledger.find("E1").tool_name)
 
         second_replay = s2.execute("retry_disposal", {"id": 2}, request_id="req-py-2")
         self.assertEqual("E2", second_replay.evidence_id)
@@ -210,7 +210,6 @@ class ReliabilityAndMcpSafetyTest(unittest.TestCase):
                 finally:
                     conn.close()
 
-            # Domain fact containing "status": "PENDING" and "error": "..." must NOT trigger isError
             status, inspect_resp = post(
                 {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "inspect_failure", "arguments": {}}}
             )
@@ -221,7 +220,6 @@ class ReliabilityAndMcpSafetyTest(unittest.TestCase):
             self.assertEqual("PENDING", inspect_payload["status"])
             self.assertEqual("previous downstream timeout", inspect_payload["error"])
 
-            # requestId is stripped before allowed_keys_rule runs
             status, strict_resp = post(
                 {
                     "jsonrpc": "2.0",
@@ -239,7 +237,6 @@ class ReliabilityAndMcpSafetyTest(unittest.TestCase):
             self.assertEqual("COMPLETED", strict_payload["executionStatus"])
             self.assertEqual("expired", strict_payload["reason"])
 
-            # Concurrent requests: slow_read in flight must NOT block ping
             slow_result: list[tuple[int, dict]] = []
             worker = Thread(
                 target=lambda: slow_result.append(
@@ -255,7 +252,6 @@ class ReliabilityAndMcpSafetyTest(unittest.TestCase):
             worker.join(timeout=3.0)
             self.assertEqual(200, slow_result[0][0])
 
-            # Unhandled crash returns clean JSON-RPC -32603 error instead of dropping HTTP connection
             boom_status, boom_resp = post(
                 {"jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": {"name": "boom_tool", "arguments": {}}}
             )

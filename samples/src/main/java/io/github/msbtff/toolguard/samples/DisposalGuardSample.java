@@ -93,7 +93,6 @@ public final class DisposalGuardSample {
             .registerTool(retryPolicy, args -> {
                 if (stockCalls.incrementAndGet() == 1) {
                     try {
-                        // Simulate hung downstream call exceeding executionTimeout(120ms) -> auto PENDING
                         Thread.sleep(1000);
                     } catch (InterruptedException interrupted) {
                         Thread.currentThread().interrupt();
@@ -126,7 +125,6 @@ public final class DisposalGuardSample {
             return new AgentOutput("matched", s.evidenceLedger().allIds(), Map.of("movementId", 9001L));
         });
 
-        // 1. High-risk mutation blocked before operator approval (APPROVAL_REQUIRED)
         GuardrailViolation approvalBlocked;
         try {
             session.execute("retry_disposal", Map.of("mode", "safe"), "req-sample-1");
@@ -135,7 +133,6 @@ public final class DisposalGuardSample {
             approvalBlocked = blocked.violation();
         }
 
-        // 2. Operator grants one-time approval strictly bound to resolved arguments digest
         approvalGate.grant(
             "sample-account-7",
             "retry_disposal",
@@ -144,7 +141,6 @@ public final class DisposalGuardSample {
             Duration.ofMinutes(5)
         );
 
-        // 3. First attempt exceeds executionTimeout(120ms) -> PENDING; retry completes; third replays
         ToolExecutionOutcome pending = session.execute("retry_disposal", Map.of("mode", "safe"), "req-sample-1");
         ToolExecutionOutcome completed = session.execute("retry_disposal", Map.of("mode", "safe"), "req-sample-1");
         ToolExecutionOutcome replayed = session.execute("retry_disposal", Map.of("mode", "safe"), "req-sample-1");

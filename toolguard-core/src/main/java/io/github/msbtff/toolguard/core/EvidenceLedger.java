@@ -109,7 +109,6 @@ public final class EvidenceLedger {
             sequences.computeIfAbsent(parsedPrefix, k -> new AtomicInteger(0))
                 .accumulateAndGet(parsedNumber, Math::max);
         } catch (NumberFormatException ignored) {
-            // Ignore numbers overflowing int range.
         }
     }
 

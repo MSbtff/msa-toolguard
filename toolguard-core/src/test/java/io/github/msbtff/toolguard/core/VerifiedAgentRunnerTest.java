@@ -51,13 +51,11 @@ class VerifiedAgentRunnerTest {
             if (attempt == 1) {
                 s.execute("get_disposal", Map.of());
                 s.execute("get_stock_movements", Map.of("page", 0));
-                // Hallucinated conclusion & evidence ID on first try
                 return new AgentOutput("no_match", List.of("E1", "E99"), Map.of());
             }
             assertFalse(priorFailures.isEmpty());
             assertTrue(priorFailures.stream().anyMatch(f -> f.code().equals("UNKNOWN_EVIDENCE_ID")));
             assertTrue(priorFailures.stream().anyMatch(f -> f.code().equals("CONCLUSION_MATCHES_EVIDENCE")));
-            // Self-repaired output grounded strictly in recorded ledger
             return new AgentOutput("matched", s.evidenceLedger().allIds(), Map.of("movementId", 77L));
         });
 

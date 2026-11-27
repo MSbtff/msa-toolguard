@@ -132,7 +132,6 @@ public final class InMemoryToolExecutionStore implements ToolExecutionStore {
                 pruneExpiredLocked(now);
             }
             if (entries.size() > maxEntries) {
-                // First evict oldest terminal (COMPLETED/REJECTED) entries, preserving active PENDING records when possible.
                 Iterator<Map.Entry<ExecutionKey, StoredExecution>> it = entries.entrySet().iterator();
                 while (entries.size() > maxEntries && it.hasNext()) {
                     Map.Entry<ExecutionKey, StoredExecution> candidate = it.next();

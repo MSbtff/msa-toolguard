@@ -70,14 +70,12 @@ class ContractAlignmentTest {
         ToolPolicy roundTripped = ToolPolicy.fromContractJson(policy.toContractJson());
         assertEquals(policy, roundTripped);
 
-        // Builder order independence: explicit requireIdempotencyKey(false) survives accessLevel(MUTATING)
         ToolPolicy nonIdempotentMutating = ToolPolicy.builder("flush_cache")
             .requireIdempotencyKey(false)
             .accessLevel(AccessLevel.MUTATING)
             .build();
         assertFalse(nonIdempotentMutating.requireIdempotencyKey());
 
-        // Contract regexes are enforced at construction time
         assertThrows(IllegalArgumentException.class, () -> ToolPolicy.builder("InvalidCamelCase").build());
         assertThrows(IllegalArgumentException.class, () -> ToolPolicy.builder("1starts_with_digit").build());
         assertThrows(IllegalArgumentException.class, () -> ToolPolicy.builder(" ").build());

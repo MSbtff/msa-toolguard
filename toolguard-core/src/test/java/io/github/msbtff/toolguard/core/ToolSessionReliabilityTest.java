@@ -73,7 +73,6 @@ class ToolSessionReliabilityTest {
         assertEquals("E1", initial.evidenceId());
         assertFalse(initial.replayed());
 
-        // Session 2 simulates a fresh session/process replaying the stored COMPLETED outcome
         ToolSession session2 = ToolSession.builder()
             .scopeKey("acct-1")
             .maxAccessLevel(AccessLevel.MUTATING)
@@ -90,7 +89,6 @@ class ToolSessionReliabilityTest {
         assertTrue(session2.evidenceLedger().hasCompletedTool("retry_disposal"));
         assertTrue(session2.evidenceLedger().find("E1").isPresent());
 
-        // Downstream tool requiring retry_disposal succeeds and gets E2 (no ID collision with E1)
         ToolExecutionOutcome followUp = session2.execute("verify_settlement", Map.of());
         assertEquals("E2", followUp.evidenceId());
 
@@ -135,18 +133,15 @@ class ToolSessionReliabilityTest {
             })
             .build();
 
-        // Occupy E1 with get_disposal first
         ToolExecutionOutcome readOutcome = session2.execute("get_disposal", Map.of());
         assertEquals("E1", readOutcome.evidenceId());
 
-        // Replay retry_disposal (which had E1 in session1) -> must NOT clobber E1, allocates E2
         ToolExecutionOutcome firstReplay = session2.execute("retry_disposal", Map.of("id", 1L), "req-2");
         assertTrue(firstReplay.replayed());
         assertEquals("E2", firstReplay.evidenceId());
         assertEquals("get_disposal", session2.evidenceLedger().find("E1").orElseThrow().toolName());
         assertEquals("retry_disposal", session2.evidenceLedger().find("E2").orElseThrow().toolName());
 
-        // Second replay in the same session reuses E2 without adding a duplicate ledger entry
         ToolExecutionOutcome secondReplay = session2.execute("retry_disposal", Map.of("id", 1L), "req-2");
         assertTrue(secondReplay.replayed());
         assertEquals("E2", secondReplay.evidenceId());
@@ -171,11 +166,9 @@ class ToolSessionReliabilityTest {
             )
             .build();
 
-        // Call 1 -> PENDING (consumes 1 of 2)
         assertEquals(ToolExecutionStatus.PENDING, session.execute("retry_disposal", Map.of("qty", 3L), "req-b").status());
         assertEquals(1, session.totalCallCount());
 
-        // Blocked IDEMPOTENCY_CONFLICT must NOT consume budget
         GuardrailException conflict = assertThrows(
             GuardrailException.class,
             () -> session.execute("retry_disposal", Map.of("qty", 99L), "req-b")
@@ -183,7 +176,6 @@ class ToolSessionReliabilityTest {
         assertEquals(ViolationCode.IDEMPOTENCY_CONFLICT, conflict.violation().code());
         assertEquals(1, session.totalCallCount());
 
-        // Valid retry succeeds using budget slot 2 of 2
         ToolExecutionOutcome completed = session.execute("retry_disposal", Map.of("qty", 3L), "req-b");
         assertEquals(ToolExecutionStatus.COMPLETED, completed.status());
         assertEquals(2, session.totalCallCount());
@@ -229,7 +221,6 @@ class ToolSessionReliabilityTest {
         InMemoryToolExecutionStore store = new InMemoryToolExecutionStore(2, Duration.ofMinutes(10), clock);
         AtomicInteger executions = new AtomicInteger(0);
 
-        // Delimiter collision resistance: ("a::b", "c", "r1") vs ("a", "b::c", "r1")
         ToolExecutionOutcome o1 = store.executeIdempotent(
             "a::b", "c", "r1", "digest-1",
             () -> ToolExecutionOutcome.completed(Map.of("n", executions.incrementAndGet()))
@@ -243,14 +234,12 @@ class ToolSessionReliabilityTest {
         assertEquals(2, executions.get());
         assertEquals(2, store.size());
 
-        // Bounded eviction: adding 3rd entry evicts oldest terminal entry so size stays <= 2
         store.executeIdempotent(
             "scope-3", "tool", "r3", "digest-3",
             () -> ToolExecutionOutcome.completed(Map.of("n", executions.incrementAndGet()))
         );
         assertEquals(2, store.size());
 
-        // TTL expiration: advancing clock past 10 minutes expires entries and allows re-execution
         clock.advance(Duration.ofMinutes(11));
         assertEquals(0, store.size());
         ToolExecutionOutcome afterTtl = store.executeIdempotent(

@@ -129,11 +129,9 @@ class SQLiteToolExecutionStore:
         with self._thread_lock:
             conn = self._connect()
             try:
-                # Step 1: Ensure durable PENDING row exists before running action
                 if not self._ensure_pending_row(conn, scope_key, tool_name, request_id, payload_digest):
                     return ToolExecutionOutcome.pending(request_id, "Timed out waiting for SQLite execution lock")
 
-                # Step 2: Acquire write lock via BEGIN IMMEDIATE for atomic check + execute + update
                 try:
                     conn.execute("BEGIN IMMEDIATE")
                 except sqlite3.OperationalError as err:

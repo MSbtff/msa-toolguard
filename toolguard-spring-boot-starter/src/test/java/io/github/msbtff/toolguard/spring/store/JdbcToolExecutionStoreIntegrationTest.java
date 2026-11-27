@@ -87,7 +87,6 @@ class JdbcToolExecutionStoreIntegrationTest {
             .maxCalls(5)
             .build();
 
-        // Process 1: uncertain downstream failure -> persisted as PENDING in PostgreSQL
         JdbcToolExecutionStore storeBeforeRestart = new JdbcToolExecutionStore(dataSource);
         ToolSession session1 = ToolSession.builder()
             .scopeKey("account-jdbc-1")
@@ -109,8 +108,6 @@ class JdbcToolExecutionStoreIntegrationTest {
         assertEquals(ToolExecutionStatus.PENDING,
             storeBeforeRestart.find("account-jdbc-1", "retry_disposal", "req-restart-1").orElseThrow().status());
 
-        // Process 2 (fresh store & session simulating JVM restart):
-        // Conflicting arguments with same requestId -> IDEMPOTENCY_CONFLICT
         JdbcToolExecutionStore storeAfterRestart = new JdbcToolExecutionStore(
             dataSource,
             JdbcToolExecutionStore.DEFAULT_TABLE_NAME,
@@ -138,7 +135,6 @@ class JdbcToolExecutionStoreIntegrationTest {
         assertEquals(ViolationCode.IDEMPOTENCY_CONFLICT, conflict.violation().code());
         assertEquals(1, downstreamCalls.get());
 
-        // Same arguments after restart -> safely resumes PENDING and completes once
         ToolExecutionOutcome completed = session2.execute(
             "retry_disposal",
             Map.of("disposalId", "disp-101", "quantity", 3L),
@@ -149,8 +145,6 @@ class JdbcToolExecutionStoreIntegrationTest {
         assertEquals(8801L, completed.facts().get("movementId"));
         assertEquals(2, downstreamCalls.get());
 
-        // Process 3 (another restart): replays persisted COMPLETED outcome without invoking handler,
-        // synchronizes EvidenceLedger, and satisfies downstream requires + OutputVerifier
         JdbcToolExecutionStore storeThirdBoot = new JdbcToolExecutionStore(dataSource);
         ToolSession session3 = ToolSession.builder()
             .scopeKey("account-jdbc-1")
@@ -223,7 +217,6 @@ class JdbcToolExecutionStoreIntegrationTest {
         assertTrue(store.find("acct-purge", "done_tool", "req-done").isEmpty());
         assertEquals(ToolExecutionStatus.PENDING, store.find("acct-purge", "pending_tool", "req-pending").orElseThrow().status());
 
-        // Calling initializeSchema() again is idempotent and purge index exists on PostgreSQL
         store.initializeSchema();
         try (var conn = dataSource.getConnection();
              var rs = conn.getMetaData().getIndexInfo(null, null, "toolguard_purge_test", false, false)) {

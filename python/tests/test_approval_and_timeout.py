@@ -41,7 +41,6 @@ class ApprovalAndTimeoutTest(unittest.TestCase):
             require_approval=True,
         )
 
-        # Fail-closed default without ApprovalGate
         fail_closed = ToolSession(
             scope_key="acct-py-7",
             max_access_level=AccessLevel.MUTATING,
@@ -73,27 +72,22 @@ class ApprovalAndTimeoutTest(unittest.TestCase):
         approval_id = gate.grant("acct-py-7", "refund_payment", {"accountId": 7, "amount": 500}, "ops", 300.0)
         self.assertTrue(approval_id.startswith("apr-"))
 
-        # Tampered arguments blocked
         with self.assertRaises(GuardrailError) as tampered:
             session.execute("refund_payment", {"amount": 99999}, request_id="req-1")
         self.assertEqual(ViolationCode.APPROVAL_REQUIRED, tampered.exception.violation.code)
         self.assertEqual(0, calls)
 
-        # Exact payload executes -> PENDING on uncertain failure
         pending = session.execute("refund_payment", {"amount": 500}, request_id="req-1")
         self.assertEqual(ToolExecutionStatus.PENDING, pending.status)
 
-        # Safe retry with SAME requestId & payload passes single-use grant and completes
         completed = session.execute("refund_payment", {"amount": 500}, request_id="req-1")
         self.assertEqual(ToolExecutionStatus.COMPLETED, completed.status)
         self.assertEqual(2, calls)
 
-        # Reusing consumed grant for NEW requestId is blocked
         with self.assertRaises(GuardrailError) as reused:
             session.execute("refund_payment", {"amount": 500}, request_id="req-2")
         self.assertEqual(ViolationCode.APPROVAL_REQUIRED, reused.exception.violation.code)
 
-        # TTL expiration & revocation
         exp_id = gate.grant("acct-py-7", "refund_payment", {"accountId": 7, "amount": 300}, "ops", 10.0)
         now[0] += timedelta(seconds=11)
         with self.assertRaises(GuardrailError):

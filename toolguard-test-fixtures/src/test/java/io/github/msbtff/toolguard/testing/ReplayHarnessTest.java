@@ -31,7 +31,6 @@ class ReplayHarnessTest {
             .boundParameters("disposalId")
             .build();
 
-        // Record phase
         ToolSession recordSession = ToolSession.builder()
             .bindParameter("disposalId", "disp-77")
             .registerTool(detailPolicy, recorder.record("get_disposal",
@@ -40,7 +39,6 @@ class ReplayHarnessTest {
         recordSession.execute("get_disposal", Map.of());
         assertEquals(1, recorder.entries().size());
 
-        // Replay phase (deterministic, no live dependency)
         ToolSession replaySession = ToolSession.builder()
             .bindParameter("disposalId", "disp-77")
             .registerTool(detailPolicy, recorder.replayHandler("get_disposal"))
@@ -60,7 +58,6 @@ class ReplayHarnessTest {
             verifier.verify(new AgentOutput("pending", List.of("E99"), Map.of()), replaySession.evidenceLedger())
         );
 
-        // Exhausted replay tape fails deterministically
         assertThrows(AssertionError.class, () -> replaySession.execute("get_disposal", Map.of()));
     }
 
@@ -105,7 +102,7 @@ class ReplayHarnessTest {
         assertEquals(2, loaded.entries().size());
 
         ToolSession replaySession = ToolSession.builder()
-            .bindParameter("accountId", 7) // Integer 7 matches recorded Long 7L via canonical JSON equality
+            .bindParameter("accountId", 7)
             .registerTool(queryPolicy, loaded.replayHandler("get_stock_movements"))
             .registerTool(rejectPolicy, loaded.replayHandler("validate_disposal"))
             .build();
@@ -119,7 +116,6 @@ class ReplayHarnessTest {
         assertEquals("INSUFFICIENT_STOCK", rejectReplayed.rejectionCode());
         assertEquals("Not enough quantity", rejectReplayed.message());
 
-        // Argument mismatch fails deterministically
         ToolTranscriptRecorder loadedAgain = ToolTranscriptRecorder.fromJson(rawJson);
         ToolSession mismatchSession = ToolSession.builder()
             .bindParameter("accountId", 7L)
@@ -127,7 +123,6 @@ class ReplayHarnessTest {
             .build();
         assertThrows(AssertionError.class, () -> mismatchSession.execute("get_stock_movements", Map.of("page", 99)));
 
-        // Malformed / unsupported cassette versions rejected
         assertThrows(IllegalArgumentException.class, () -> ToolTranscriptRecorder.fromJson("{\"version\":99,\"entries\":[]}"));
         assertThrows(IllegalArgumentException.class, () -> ToolTranscriptRecorder.fromJson("{\"version\":1,\"entries\":\"bad\"}"));
     }

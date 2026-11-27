@@ -104,7 +104,6 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
             if (isDuplicateIndex(ex)) {
                 return;
             }
-            // Fallback for databases such as MySQL 8 that do not accept CREATE INDEX IF NOT EXISTS
             String plainSql = "CREATE INDEX " + indexName + " ON " + tableName + " (status, updated_at_ms)";
             try {
                 stmt.execute(plainSql);
@@ -389,7 +388,6 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
         try {
             conn.rollback();
         } catch (SQLException ignored) {
-            // Preserve original exception when rollback also fails.
         }
     }
 
@@ -397,7 +395,6 @@ public final class JdbcToolExecutionStore implements ToolExecutionStore {
         try {
             conn.setAutoCommit(autoCommit);
         } catch (SQLException ignored) {
-            // Connection pool handles broken connections on close.
         }
     }
 

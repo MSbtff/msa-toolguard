@@ -82,7 +82,6 @@ class RedisToolExecutionStoreIntegrationTest {
             .maxCalls(5)
             .build();
 
-        // Process 1: uncertain failure -> PENDING saved in Redis
         RedisToolExecutionStore store1 = new RedisToolExecutionStore(redisTemplate);
         ToolSession session1 = ToolSession.builder()
             .scopeKey("account-redis-1")
@@ -100,7 +99,6 @@ class RedisToolExecutionStoreIntegrationTest {
         assertEquals(ToolExecutionStatus.PENDING,
             store1.find("account-redis-1", "retry_disposal", "req-r1").orElseThrow().status());
 
-        // Process 2 (fresh store simulating restart): payload mismatch -> IDEMPOTENCY_CONFLICT
         RedisToolExecutionStore store2 = new RedisToolExecutionStore(redisTemplate);
         ToolSession session2 = ToolSession.builder()
             .scopeKey("account-redis-1")
@@ -118,14 +116,11 @@ class RedisToolExecutionStoreIntegrationTest {
         );
         assertEquals(ViolationCode.IDEMPOTENCY_CONFLICT, conflict.violation().code());
 
-        // Retry with original payload completes once
         ToolExecutionOutcome completed = session2.execute("retry_disposal", Map.of("disposalId", "disp-r1"), "req-r1");
         assertEquals(ToolExecutionStatus.COMPLETED, completed.status());
         assertFalse(completed.replayed());
         assertEquals(4401L, completed.facts().get("movementId"));
 
-        // Process 3 (another restart): replays from Redis without invoking downstream,
-        // synchronizes EvidenceLedger, and satisfies requires + OutputVerifier
         RedisToolExecutionStore store3 = new RedisToolExecutionStore(redisTemplate);
         ToolSession session3 = ToolSession.builder()
             .scopeKey("account-redis-1")
@@ -178,7 +173,6 @@ class RedisToolExecutionStoreIntegrationTest {
                 () -> {
                     worker1Started.countDown();
                     try {
-                        // Wait until worker 2 has acquired the expired lock and committed newer state
                         assertTrue(worker2Committed.await(5, TimeUnit.SECONDS));
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
@@ -188,7 +182,6 @@ class RedisToolExecutionStoreIntegrationTest {
             ));
 
             assertTrue(worker1Started.await(5, TimeUnit.SECONDS));
-            // Wait past the 200ms lock TTL so worker 2 acquires a fresh lock
             Thread.sleep(280);
 
             ToolExecutionOutcome freshOutcome = store.executeIdempotent(
@@ -207,7 +200,6 @@ class RedisToolExecutionStoreIntegrationTest {
             assertEquals(ToolExecutionStatus.PENDING, staleOutcome.status());
             assertTrue(staleOutcome.message().contains("lock expired"));
 
-            // Redis must still hold fresh-worker-2, NOT overwritten by stale-worker-1
             ToolExecutionOutcome persisted = store.find("acct-fence", "retry_disposal", "req-fence-1").orElseThrow();
             assertEquals(ToolExecutionStatus.COMPLETED, persisted.status());
             assertEquals("fresh-worker-2", persisted.facts().get("winner"));

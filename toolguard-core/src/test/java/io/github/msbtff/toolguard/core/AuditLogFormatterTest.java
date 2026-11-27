@@ -121,7 +121,6 @@ class AuditLogFormatterTest {
         assertTrue(markdown.contains("FAILED"));
         assertTrue(markdown.contains("STATUS_MISMATCH"));
 
-        // Verify array redaction inside nested facts
         EvidenceLedger ledger = new EvidenceLedger();
         EvidenceRecord record = ledger.record(
             "E",

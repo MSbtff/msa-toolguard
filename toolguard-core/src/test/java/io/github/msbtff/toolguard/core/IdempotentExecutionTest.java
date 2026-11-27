@@ -44,33 +44,28 @@ class IdempotentExecutionTest {
             })
             .build();
 
-        // Missing requestId is blocked
         GuardrailException missingKey = assertThrows(
             GuardrailException.class,
             () -> session.execute("retry_disposal", Map.of("disposalId", "disp-1"))
         );
         assertEquals(ViolationCode.MISSING_IDEMPOTENCY_KEY, missingKey.violation().code());
 
-        // First attempt loses response -> stays PENDING (never fabricated as COMPLETED)
         ToolExecutionOutcome first = session.execute("retry_disposal", Map.of("disposalId", "disp-1"), "req-disp-1");
         assertEquals(ToolExecutionStatus.PENDING, first.status());
         assertFalse(first.replayed());
         assertEquals("E1", first.evidenceId());
 
-        // Different payload with same requestId -> IDEMPOTENCY_CONFLICT
         GuardrailException conflict = assertThrows(
             GuardrailException.class,
             () -> session.execute("retry_disposal", Map.of("disposalId", "disp-2"), "req-disp-1")
         );
         assertEquals(ViolationCode.IDEMPOTENCY_CONFLICT, conflict.violation().code());
 
-        // Safe retry with identical requestId and arguments -> completes once
         ToolExecutionOutcome second = session.execute("retry_disposal", Map.of("disposalId", "disp-1"), "req-disp-1");
         assertEquals(ToolExecutionStatus.COMPLETED, second.status());
         assertFalse(second.replayed());
         assertEquals(9001L, second.facts().get("movementId"));
 
-        // Further retry replays stored COMPLETED result without invoking downstream handler again
         ToolExecutionOutcome third = session.execute("retry_disposal", Map.of("disposalId", "disp-1"), "req-disp-1");
         assertEquals(ToolExecutionStatus.COMPLETED, third.status());
         assertTrue(third.replayed());
@@ -170,7 +165,6 @@ class IdempotentExecutionTest {
             assertEquals(threads - 1, replayed);
         }
 
-        // 32 concurrent callers racing against maxTotalCalls=10 -> exactly 10 allowed, 22 blocked
         AtomicInteger allowedReads = new AtomicInteger(0);
         AtomicInteger budgetBlocked = new AtomicInteger(0);
         ToolSession sharedSession = ToolSession.builder()
