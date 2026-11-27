@@ -36,9 +36,8 @@ class SQLiteToolExecutionStoreTest(unittest.TestCase):
             retry_policy = ToolPolicy(name="retry_disposal", access_level=AccessLevel.MUTATING, max_calls=5)
             calls = 0
 
-            # Process 1: uncertain failure persisted as PENDING
             store1 = SQLiteToolExecutionStore(db_path, clock_ms=lambda: t0_ms)
-            store1.initialize_schema()  # idempotent
+            store1.initialize_schema()
             s1 = ToolSession(
                 scope_key="acct-sqlite-1",
                 max_access_level=AccessLevel.MUTATING,
@@ -54,9 +53,8 @@ class SQLiteToolExecutionStoreTest(unittest.TestCase):
             pending = s1.execute("retry_disposal", {"qty": 3}, request_id="req-sq-1")
             self.assertEqual(ToolExecutionStatus.PENDING, pending.status)
             self.assertFalse(pending.replayed)
-            self.assertEqual(ToolExecutionStatus.PENDING, store1.find("acct-sqlite-1", "retry_disposal", "req-sq-1").status)  # type: ignore[union-attr]
+            self.assertEqual(ToolExecutionStatus.PENDING, store1.find("acct-sqlite-1", "retry_disposal", "req-sq-1").status)
 
-            # Process 2 (fresh store instance simulating restart): conflict blocked, valid retry completes once
             store2 = SQLiteToolExecutionStore(db_path, initialize_schema=False, clock_ms=lambda: t0_ms)
             s2 = ToolSession(
                 scope_key="acct-sqlite-1",
@@ -81,7 +79,6 @@ class SQLiteToolExecutionStoreTest(unittest.TestCase):
             self.assertEqual(9901, completed.facts["movementId"])
             self.assertEqual(2, calls)
 
-            # Process 3: replays persisted COMPLETED outcome, syncs EvidenceLedger, satisfies requires + verifier
             store3 = SQLiteToolExecutionStore(db_path, clock_ms=lambda: t0_ms)
             s3 = ToolSession(
                 scope_key="acct-sqlite-1",
@@ -109,7 +106,6 @@ class SQLiteToolExecutionStoreTest(unittest.TestCase):
             )
             self.assertTrue(vr.verified)
 
-            # Persist REJECTED + PENDING, verify purge_terminal_before cleans terminal rows and keeps PENDING
             store3.execute_idempotent(
                 "acct-sqlite-1",
                 "retry_disposal",
@@ -142,7 +138,7 @@ class SQLiteToolExecutionStoreTest(unittest.TestCase):
             self.assertIsNone(store3.find("acct-sqlite-1", "retry_disposal", "req-sq-rej"))
             self.assertEqual(
                 ToolExecutionStatus.PENDING,
-                store3.find("acct-sqlite-1", "retry_disposal", "req-sq-pend").status,  # type: ignore[union-attr]
+                store3.find("acct-sqlite-1", "retry_disposal", "req-sq-pend").status,
             )
 
     def test_serializes_16_concurrent_threads_with_zero_duplicate_mutations(self) -> None:
@@ -189,7 +185,6 @@ class SQLiteToolExecutionStoreTest(unittest.TestCase):
             db_path = Path(tmp) / "lock_timeout.db"
             store = SQLiteToolExecutionStore(db_path, lock_timeout_seconds=0.1)
 
-            # Hold an external EXCLUSIVE lock from another SQLite connection
             blocker = sqlite3.connect(str(db_path), isolation_level=None)
             try:
                 blocker.execute("BEGIN EXCLUSIVE")

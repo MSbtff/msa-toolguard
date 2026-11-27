@@ -185,7 +185,7 @@ public final class CanonicalJson {
         }
 
         private Map<String, Object> parseObject(int depth) {
-            pos++; // consume '{'
+            pos++;
             Map<String, Object> map = new LinkedHashMap<>();
             skipWhitespace();
             if (!isAtEnd() && input.charAt(pos) == '}') {
@@ -220,7 +220,7 @@ public final class CanonicalJson {
         }
 
         private List<Object> parseArray(int depth) {
-            pos++; // consume '['
+            pos++;
             List<Object> list = new ArrayList<>();
             skipWhitespace();
             if (!isAtEnd() && input.charAt(pos) == ']') {
@@ -244,7 +244,7 @@ public final class CanonicalJson {
         }
 
         private String parseString() {
-            pos++; // consume opening '"'
+            pos++;
             StringBuilder sb = new StringBuilder();
             while (!isAtEnd()) {
                 char ch = input.charAt(pos++);

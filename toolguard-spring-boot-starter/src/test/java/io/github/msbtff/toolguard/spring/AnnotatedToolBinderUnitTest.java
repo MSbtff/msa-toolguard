@@ -120,14 +120,12 @@ class AnnotatedToolBinderUnitTest {
         AnnotatedToolBinder.registerAll(builder, new DeclarativeTools());
         ToolSession session = builder.build();
 
-        // Case-insensitive forbidKeys blocks "Authorization"
         GuardrailException authBlocked = assertThrows(
             GuardrailException.class,
             () -> session.execute("search_disposals", Map.of("Authorization", "Bearer leak", "query", "milk"))
         );
         assertEquals(ViolationCode.POLICY_DENIED, authBlocked.violation().code());
 
-        // allowedKeys blocks undeclared argument while automatically allowing boundParameter "accountId"
         GuardrailException extraBlocked = assertThrows(
             GuardrailException.class,
             () -> session.execute("search_disposals", Map.of("query", "milk", "extra", 1))
@@ -139,7 +137,6 @@ class AnnotatedToolBinderUnitTest {
         assertEquals("SR1", searchOk.evidenceId());
         assertEquals(7L, searchOk.facts().get("accountId"));
 
-        // IdempotencyMode.REQUIRED enforces requestId on READ_ONLY tool
         GuardrailException missingKey = assertThrows(
             GuardrailException.class,
             () -> session.execute("idempotent_read", Map.of())
@@ -147,7 +144,6 @@ class AnnotatedToolBinderUnitTest {
         assertEquals(ViolationCode.MISSING_IDEMPOTENCY_KEY, missingKey.violation().code());
         assertEquals(ToolExecutionStatus.COMPLETED, session.execute("idempotent_read", Map.of(), "req-read-1").status());
 
-        // IdempotencyMode.DISABLED allows MUTATING tool without requestId
         ToolExecutionOutcome mutOk = session.execute("non_idempotent_mutate", Map.of());
         assertEquals(ToolExecutionStatus.COMPLETED, mutOk.status());
         assertEquals(true, mutOk.facts().get("mutated"));
@@ -184,7 +180,6 @@ class AnnotatedToolBinderUnitTest {
             () -> AnnotatedToolBinder.registerAll(ToolSession.builder(), new NegativeTimeoutTool())
         );
 
-        // Verify @GuardedTool(requireApproval=true, timeoutMs=80)
         InMemoryApprovalGate gate = new InMemoryApprovalGate();
         ToolSession.Builder approvalBuilder = ToolSession.builder()
             .scopeKey("acct-ann")

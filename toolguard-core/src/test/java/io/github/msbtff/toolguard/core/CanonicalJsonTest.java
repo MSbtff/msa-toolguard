@@ -69,7 +69,6 @@ class CanonicalJsonTest {
         assertEquals("MUTATING", parsed.get("z"));
         assertEquals(Arrays.asList("x", 1L, null), parsed.get("a"));
 
-        // Unicode escapes, scientific notation, and negative numbers
         Map<String, Object> parsedComplex = CanonicalJson.parseObject(
             "{\"uni\":\"\\u0041\\/B\",\"exp\":1.5e2,\"neg\":-12,\"zero\":0}"
         );

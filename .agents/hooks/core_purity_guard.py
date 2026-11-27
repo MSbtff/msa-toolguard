@@ -34,7 +34,6 @@ SECRET_FILENAMES = frozenset({
 SECRET_SUFFIXES = frozenset({".key", ".pem", ".p12", ".pfx", ".jks"})
 CORE_RUNTIME_DEP_RE = re.compile(r"^\s*(?:implementation|api|runtimeOnly)\b", re.MULTILINE)
 
-# Hard-deny shell patterns (never allowed even in Turbo-like mode)
 DESTRUCTIVE_CMD_PATTERNS = (
     (
         re.compile(r"\brm\s+(?:-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r|--recursive\b[^\n;]*--force\b)", re.IGNORECASE),
@@ -73,17 +72,14 @@ DESTRUCTIVE_CMD_PATTERNS = (
     ),
 )
 
-# Shell metacharacters that fall back to "ask" instead of auto-allow
 OPAQUE_SHELL_RE = re.compile(r"[|`<>]|\$\(|\\\n")
 ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=.*$")
 FORBIDDEN_ENV_KEYS = frozenset({"LD_PRELOAD", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH"})
 
 SAFE_GIT_SUBCOMMANDS = frozenset({
-    # 조회·이력·진단
     "status", "diff", "log", "show", "reflog", "describe",
     "rev-parse", "rev-list", "ls-files", "ls-tree", "diff-tree",
     "cat-file", "blame", "shortlog", "grep", "merge-base", "check-ignore",
-    # 브랜치·태그·작업 트리·원격 동기화
     "branch", "tag", "add", "commit", "checkout", "switch", "stash",
     "merge", "rebase", "cherry-pick", "revert", "restore", "reset",
     "mv", "rm", "config", "worktree",
@@ -166,7 +162,6 @@ def token_escapes_repo(token: str) -> bool:
     if ".." in Path(token).parts:
         return True
     if token.startswith(("/", "~")):
-        # Ignore URLs or flags like --format=... handled before this check
         _, rel = resolve_path(token)
         return rel is None
     return False
@@ -195,7 +190,6 @@ def is_safe_segment(segment: str) -> bool:
     cmd = tokens[idx]
     rest = tokens[idx + 1:]
 
-    # Block any path argument escaping REPO_ROOT (except URLs like https://...)
     for arg in rest:
         if arg.startswith(("http://", "https://")):
             continue
@@ -210,7 +204,6 @@ def is_safe_segment(segment: str) -> bool:
     if cmd == "git":
         if not rest:
             return False
-        # Disallow -C pointing outside repo (already caught above) and check subcommand
         sub_idx = 0
         while sub_idx < len(rest) and rest[sub_idx].startswith("-"):
             if rest[sub_idx] in ("-C", "-c", "--git-dir", "--work-tree"):
@@ -228,7 +221,6 @@ def is_safe_segment(segment: str) -> bool:
         return True
 
     if cmd in ("python3", "python", "pytest"):
-        # Disallow inline arbitrary code execution for auto-allow; allow unittest/module/test files
         if "-c" in rest:
             return False
         return True
@@ -262,7 +254,6 @@ def evaluate_run_command(args: dict):
     if OPAQUE_SHELL_RE.search(cmd):
         return "ask", None
 
-    # Split simple command chains (&&, ;) while respecting quotes
     segments = re.split(r"\s*(?:&&|;)\s*", cmd)
     if all(is_safe_segment(seg) for seg in segments):
         return "allow", None

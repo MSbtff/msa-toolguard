@@ -54,35 +54,30 @@ class ToolSessionPolicyTest {
             .registerTool(retryPolicy, args -> ToolExecutionOutcome.completed(Map.of("status", "COMPLETED")))
             .build();
 
-        // MUTATING tool blocked in READ_ONLY session
         GuardrailException accessDenied = assertThrows(
             GuardrailException.class,
             () -> session.execute("retry_disposal", Map.of(), "req-1")
         );
         assertEquals(ViolationCode.ACCESS_DENIED, accessDenied.violation().code());
 
-        // Prerequisite not met
         GuardrailException prereq = assertThrows(
             GuardrailException.class,
             () -> session.execute("get_stock_movements", Map.of("page", 0))
         );
         assertEquals(ViolationCode.PREREQUISITE_NOT_MET, prereq.violation().code());
 
-        // Host-bound parameter tampering blocked
         GuardrailException scopeViolation = assertThrows(
             GuardrailException.class,
             () -> session.execute("get_disposal", Map.of("disposalId", "disp-999"))
         );
         assertEquals(ViolationCode.SCOPE_VIOLATION, scopeViolation.violation().code());
 
-        // Valid detail call injects bound scope parameters automatically
         ToolExecutionOutcome detail = session.execute("get_disposal", Map.of());
         assertEquals(ToolExecutionStatus.COMPLETED, detail.status());
         assertEquals("E1", detail.evidenceId());
         assertEquals(7L, capturedArgs.get().get("accountId"));
         assertEquals("disp-100", capturedArgs.get().get("disposalId"));
 
-        // Deny rule blocks out-of-range page and forbidden secret key
         GuardrailException rangeDenied = assertThrows(
             GuardrailException.class,
             () -> session.execute("get_stock_movements", Map.of("page", -1))
@@ -95,14 +90,12 @@ class ToolSessionPolicyTest {
         );
         assertEquals(ViolationCode.POLICY_DENIED, keyDenied.violation().code());
 
-        // Per-tool call budget enforced
         GuardrailException detailBudget = assertThrows(
             GuardrailException.class,
             () -> session.execute("get_disposal", Map.of())
         );
         assertEquals(ViolationCode.CALL_BUDGET_EXCEEDED, detailBudget.violation().code());
 
-        // Two valid ledger calls exhaust total session budget (1 + 2 = 3)
         assertEquals("E2", session.execute("get_stock_movements", Map.of("page", 0)).evidenceId());
         assertEquals("E3", session.execute("get_stock_movements", Map.of("page", 1)).evidenceId());
 
@@ -130,7 +123,6 @@ class ToolSessionPolicyTest {
             .registerTool(queryPolicy, args -> ToolExecutionOutcome.completed(Map.of("ok", true)))
             .build();
 
-        // Case-insensitive forbidden key blocking ("Authorization", "API_KEY")
         GuardrailException upperAuth = assertThrows(
             GuardrailException.class,
             () -> session.execute("search_disposals", Map.of("Authorization", "Bearer leak", "query", "milk"))
@@ -143,7 +135,6 @@ class ToolSessionPolicyTest {
         );
         assertEquals(ViolationCode.POLICY_DENIED, upperApiKey.violation().code());
 
-        // Unexpected keys blocked with sorted parameter names
         GuardrailException extraKeys = assertThrows(
             GuardrailException.class,
             () -> session.execute("search_disposals", Map.of("zeta", 1, "alpha", 2))
@@ -151,7 +142,6 @@ class ToolSessionPolicyTest {
         assertEquals(ViolationCode.POLICY_DENIED, extraKeys.violation().code());
         assertTrue(extraKeys.violation().message().contains("alpha, zeta"));
 
-        // Forbidden value pattern blocked
         GuardrailException sqlBlocked = assertThrows(
             GuardrailException.class,
             () -> session.execute("search_disposals", Map.of("query", "milk; DROP TABLE disposals"))
@@ -159,14 +149,12 @@ class ToolSessionPolicyTest {
         assertEquals(ViolationCode.POLICY_DENIED, sqlBlocked.violation().code());
         assertEquals("SQL injection pattern blocked", sqlBlocked.violation().message());
 
-        // Non-integer page blocked by integerRange
         GuardrailException nonIntPage = assertThrows(
             GuardrailException.class,
             () -> session.execute("search_disposals", Map.of("page", 1.5))
         );
         assertEquals(ViolationCode.POLICY_DENIED, nonIntPage.violation().code());
 
-        // Valid invocation passes (query absent also passes forbidValuePattern)
         ToolExecutionOutcome ok = session.execute("search_disposals", Map.of("page", 0));
         assertEquals(ToolExecutionStatus.COMPLETED, ok.status());
         ToolExecutionOutcome okQuery = session.execute("search_disposals", Map.of("query", "milk", "page", 2));
@@ -196,7 +184,6 @@ class ToolSessionPolicyTest {
             )
             .build();
 
-        // Rejected outcome records REJECTED evidence and does NOT satisfy prerequisite
         ToolExecutionOutcome rejected = session.execute("validate_item", Map.of());
         assertEquals(ToolExecutionStatus.REJECTED, rejected.status());
         assertEquals("INVALID_STATE", rejected.rejectionCode());
@@ -210,14 +197,12 @@ class ToolSessionPolicyTest {
         );
         assertEquals(ViolationCode.PREREQUISITE_NOT_MET, prereqBlocked.violation().code());
 
-        // Unregistered tool -> UNREGISTERED_TOOL
         GuardrailException unknown = assertThrows(
             GuardrailException.class,
             () -> session.execute("nonexistent_tool", Map.of())
         );
         assertEquals(ViolationCode.UNREGISTERED_TOOL, unknown.violation().code());
 
-        // Missing host-bound scope parameter -> SCOPE_VIOLATION
         GuardrailException missingScope = assertThrows(
             GuardrailException.class,
             () -> session.execute("scoped_tool", Map.of())
@@ -229,7 +214,6 @@ class ToolSessionPolicyTest {
         assertEquals("validate_item:REJECTED", secondEvents.get(0));
         assertEquals(1, session.totalCallCount());
 
-        // Invalid session maxTotalCalls rejected
         assertThrows(IllegalArgumentException.class, () -> ToolSession.builder().maxTotalCalls(0));
     }
 }

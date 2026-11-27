@@ -104,7 +104,6 @@ public final class InMemoryApprovalGate implements ApprovalGate {
     public synchronized ApprovalDecision check(ApprovalRequest request) {
         Objects.requireNonNull(request, "request");
         Instant now = clock.instant();
-        // First allow idempotent retries of the exact same approved requestId + payloadDigest
         if (request.requestId() != null) {
             for (Grant grant : grantsById.values()) {
                 if (matchesTarget(grant, request)
@@ -116,7 +115,6 @@ public final class InMemoryApprovalGate implements ApprovalGate {
                 }
             }
         }
-        // Otherwise consume the first active, unconsumed grant matching (scopeKey, toolName, payloadDigest)
         for (Grant grant : grantsById.values()) {
             if (matchesTarget(grant, request)
                 && !grant.revoked

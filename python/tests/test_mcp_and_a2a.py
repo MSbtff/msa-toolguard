@@ -61,12 +61,10 @@ class McpAndA2AHarnessTest(unittest.TestCase):
                 finally:
                     conn.close()
 
-            # Auth and Origin protections
             self.assertEqual(403, post({"jsonrpc": "2.0", "id": 1, "method": "ping"}, auth="Bearer wrong")[0])
             self.assertEqual(403, post({"jsonrpc": "2.0", "id": 1, "method": "ping"}, origin="http://evil.local")[0])
             self.assertEqual(202, post({"jsonrpc": "2.0", "method": "notifications/initialized"})[0])
 
-            # Standard MCP methods
             status, init = post({"jsonrpc": "2.0", "id": 1, "method": "initialize"})
             self.assertEqual(200, status)
             self.assertEqual("2025-03-26", init["result"]["protocolVersion"])
@@ -75,7 +73,6 @@ class McpAndA2AHarnessTest(unittest.TestCase):
             self.assertEqual(200, status)
             self.assertEqual(2, len(listed["result"]["tools"]))
 
-            # Allowed read call returns evidenceId
             status, call_ok = post(
                 {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "get_disposal", "arguments": {}}}
             )
@@ -85,7 +82,6 @@ class McpAndA2AHarnessTest(unittest.TestCase):
             self.assertEqual("E1", payload["evidenceId"])
             self.assertEqual("disp-7", payload["disposalId"])
 
-            # Mutating tool blocked by READ_ONLY session -> isError=True with ACCESS_DENIED
             status, call_blocked = post(
                 {
                     "jsonrpc": "2.0",
@@ -165,11 +161,9 @@ class McpAndA2AHarnessTest(unittest.TestCase):
         self.assertEqual("TASK_STATE_COMPLETED", completed["status"]["state"])
         self.assertEqual({"echo": {"k": "v"}}, completed["artifacts"][0]["parts"][0]["data"])
 
-        # Idempotent same messageId returns same taskId
         replay = client.send_message(msg)
         self.assertEqual(task["id"], replay["id"])
 
-        # Conflicting payload with same messageId returns 409
         conflict_msg = {
             "messageId": msg_id,
             "role": "ROLE_USER",
@@ -179,20 +173,17 @@ class McpAndA2AHarnessTest(unittest.TestCase):
             client.send_message(conflict_msg)
         self.assertIn("HTTP 409", str(ctx.exception))
 
-        # Busy returns 429
         busy_flag["busy"] = True
         with self.assertRaises(A2AError) as ctx:
             client.send_message({"messageId": str(uuid4()), "role": "ROLE_USER", "parts": [{"data": {}}]})
         self.assertIn("HTTP 429", str(ctx.exception))
         busy_flag["busy"] = False
 
-        # Wrong token returns 401
         bad_client = LoopbackA2AClient(server.server_port, "wrong-token")
         with self.assertRaises(A2AError) as ctx:
             bad_client.request("GET", f"/tasks/{task['id']}")
         self.assertIn("HTTP 401", str(ctx.exception))
 
-        # Agent card accessible without auth
         conn = http.client.HTTPConnection("127.0.0.1", server.server_port, timeout=3)
         try:
             conn.request("GET", AGENT_CARD_PATH, headers={"A2A-Version": A2A_VERSION, "Accept": A2A_CONTENT_TYPE})

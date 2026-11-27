@@ -78,7 +78,6 @@ class ApprovalAndTimeoutTest {
             .requireApproval(true)
             .build();
 
-        // 1. Default session without ApprovalGate fails closed (DENY_ALL) and consumes 0 budget
         ToolSession failClosed = ToolSession.builder()
             .scopeKey("acct-7")
             .maxAccessLevel(AccessLevel.MUTATING)
@@ -93,7 +92,6 @@ class ApprovalAndTimeoutTest {
         assertTrue(deniedDefault.violation().repairHint().contains("payloadDigest="));
         assertEquals(0, failClosed.totalCallCount());
 
-        // 2. Session with InMemoryApprovalGate
         ToolSession session = ToolSession.builder()
             .scopeKey("acct-7")
             .maxAccessLevel(AccessLevel.MUTATING)
@@ -108,7 +106,6 @@ class ApprovalAndTimeoutTest {
             })
             .build();
 
-        // Grant strictly bound to {"accountId": 7L, "amount": 500L}
         String approvalId = gate.grant(
             "acct-7",
             "refund_payment",
@@ -118,7 +115,6 @@ class ApprovalAndTimeoutTest {
         );
         assertTrue(approvalId.startsWith("apr-"));
 
-        // Parameter tampering after approval (amount=99999 instead of 500) -> BLOCKED!
         GuardrailException tampered = assertThrows(
             GuardrailException.class,
             () -> session.execute("refund_payment", Map.of("amount", 99999L), "req-1")
@@ -126,17 +122,14 @@ class ApprovalAndTimeoutTest {
         assertEquals(ViolationCode.APPROVAL_REQUIRED, tampered.violation().code());
         assertEquals(0, calls.get());
 
-        // Approved exact payload executes -> uncertain failure stays PENDING
         ToolExecutionOutcome pending = session.execute("refund_payment", Map.of("amount", 500L), "req-1");
         assertEquals(ToolExecutionStatus.PENDING, pending.status());
         assertEquals(1, calls.get());
 
-        // Safe retry with SAME requestId and SAME payload passes single-use grant and completes!
         ToolExecutionOutcome completed = session.execute("refund_payment", Map.of("amount", 500L), "req-1");
         assertEquals(ToolExecutionStatus.COMPLETED, completed.status());
         assertEquals(2, calls.get());
 
-        // Reusing the consumed grant with a NEW requestId -> BLOCKED!
         GuardrailException reused = assertThrows(
             GuardrailException.class,
             () -> session.execute("refund_payment", Map.of("amount", 500L), "req-2")
@@ -144,7 +137,6 @@ class ApprovalAndTimeoutTest {
         assertEquals(ViolationCode.APPROVAL_REQUIRED, reused.violation().code());
         assertEquals(2, calls.get());
 
-        // TTL expiry and revocation block execution
         String expiredGrant = gate.grant(
             "acct-7", "refund_payment", Map.of("accountId", 7L, "amount", 300L), "ops", Duration.ofSeconds(10)
         );
@@ -182,11 +174,9 @@ class ApprovalAndTimeoutTest {
             .registerTool(conditionalPolicy, args -> ToolExecutionOutcome.completed(Map.of("qty", args.get("qty"))))
             .build();
 
-        // Below threshold -> executes without approval
         ToolExecutionOutcome small = session.execute("dispose_stock", Map.of("qty", 10L), "req-small");
         assertEquals(ToolExecutionStatus.COMPLETED, small.status());
 
-        // Above threshold -> blocked with pending approval ticket ID + digest in repairHint
         GuardrailException blocked = assertThrows(
             GuardrailException.class,
             () -> session.execute("dispose_stock", Map.of("qty", 100L), "req-large")
@@ -253,15 +243,12 @@ class ApprovalAndTimeoutTest {
         assertTrue(interruptedLatch.await(2, TimeUnit.SECONDS), "Timed-out virtual thread should be interrupted");
         assertTrue(elapsedMs < 1000, "Timeout should return promptly without waiting for 2000ms sleep");
 
-        // Safe retry after timeout recovers from PENDING to COMPLETED
         ToolExecutionOutcome recovered = session.execute("slow_downstream", Map.of("id", 1L), "req-slow-1");
         assertEquals(ToolExecutionStatus.COMPLETED, recovered.status());
         assertEquals(true, recovered.facts().get("recovered"));
 
-        // Fast tool succeeds under timeout wrapper
         assertEquals(ToolExecutionStatus.COMPLETED, session.execute("fast_tool", Map.of()).status());
 
-        // Non-uncertain runtime exception propagates cleanly out of virtual thread
         IllegalArgumentException thrown = assertThrows(
             IllegalArgumentException.class,
             () -> session.execute("crash_timed_tool", Map.of())
@@ -282,7 +269,6 @@ class ApprovalAndTimeoutTest {
             .executionTimeout(Duration.ofMillis(2500))
             .build();
 
-        // Contract round-trip & schema check for tool-policy-v1.schema.json
         Map<String, Object> policySchema = CanonicalJson.parseObject(
             Files.readString(locateContractsDir().resolve("tool-policy-v1.schema.json"))
         );
@@ -293,7 +279,6 @@ class ApprovalAndTimeoutTest {
         assertEquals(2500L, serializedPolicy.get("executionTimeoutMs"));
         assertEquals(policy, ToolPolicy.fromContractJson(policy.toContractJson()));
 
-        // Session timeout enforcement & audit schema check
         ToolSession session = ToolSession.builder()
             .sessionId("sess-deadline-1")
             .maxAccessLevel(AccessLevel.MUTATING)
@@ -303,10 +288,8 @@ class ApprovalAndTimeoutTest {
             .registerTool(policy, args -> ToolExecutionOutcome.completed(Map.of()))
             .build();
 
-        // Before deadline: hits APPROVAL_REQUIRED
         assertThrows(GuardrailException.class, () -> session.execute("high_risk_write", Map.of(), "req-1"));
 
-        // Advance past session deadline -> SESSION_TIMEOUT
         clock.advance(Duration.ofSeconds(6));
         GuardrailException expired = assertThrows(
             GuardrailException.class,
@@ -329,7 +312,6 @@ class ApprovalAndTimeoutTest {
         assertTrue(violationEnum.contains(approvalEvent.get("violationCode")));
         assertTrue(violationEnum.contains(timeoutEvent.get("violationCode")));
 
-        // Validation guards on non-positive timeouts
         assertThrows(IllegalArgumentException.class, () -> ToolPolicy.builder("bad_t").executionTimeout(Duration.ZERO));
         assertThrows(IllegalArgumentException.class, () -> ToolSession.builder().sessionTimeout(Duration.ofMillis(-1)));
     }

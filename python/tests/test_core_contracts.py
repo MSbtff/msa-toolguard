@@ -130,22 +130,18 @@ class CoreContractsTest(unittest.TestCase):
             retry_handler,
         )
 
-        # Prerequisite violation
         with self.assertRaises(GuardrailError) as ctx:
             session.execute("get_stock_movements", {"page": 0})
         self.assertEqual(ViolationCode.PREREQUISITE_NOT_MET, ctx.exception.violation.code)
 
-        # Scope override violation
         with self.assertRaises(GuardrailError) as ctx:
             session.execute("get_disposal", {"disposalId": "disp-other"})
         self.assertEqual(ViolationCode.SCOPE_VIOLATION, ctx.exception.violation.code)
 
-        # Valid read
         detail = session.execute("get_disposal", {})
         self.assertEqual("E1", detail.evidence_id)
         self.assertEqual(7, detail.facts["accountId"])
 
-        # Deny rules
         with self.assertRaises(GuardrailError) as ctx:
             session.execute("get_stock_movements", {"page": -1})
         self.assertEqual(ViolationCode.POLICY_DENIED, ctx.exception.violation.code)
@@ -154,28 +150,23 @@ class CoreContractsTest(unittest.TestCase):
             session.execute("get_stock_movements", {"page": 0, "authorization": "Bearer x"})
         self.assertEqual(ViolationCode.POLICY_DENIED, ctx.exception.violation.code)
 
-        # Missing idempotency key
         with self.assertRaises(GuardrailError) as ctx:
             session.execute("retry_disposal", {})
         self.assertEqual(ViolationCode.MISSING_IDEMPOTENCY_KEY, ctx.exception.violation.code)
 
-        # Uncertain execution stays PENDING
         first = session.execute("retry_disposal", {"reason": "expired"}, request_id="req-1")
         self.assertEqual(ToolExecutionStatus.PENDING, first.status)
         self.assertFalse(first.replayed)
 
-        # Conflicting arguments with same requestId -> IDEMPOTENCY_CONFLICT
         with self.assertRaises(GuardrailError) as ctx:
             session.execute("retry_disposal", {"reason": "different"}, request_id="req-1")
         self.assertEqual(ViolationCode.IDEMPOTENCY_CONFLICT, ctx.exception.violation.code)
 
-        # Safe retry completes once
         second = session.execute("retry_disposal", {"reason": "expired"}, request_id="req-1")
         self.assertEqual(ToolExecutionStatus.COMPLETED, second.status)
         self.assertFalse(second.replayed)
         self.assertEqual(9001, second.facts["movementId"])
 
-        # Subsequent retry replays without invoking handler again
         third = session.execute("retry_disposal", {"reason": "expired"}, request_id="req-1")
         self.assertEqual(ToolExecutionStatus.COMPLETED, third.status)
         self.assertTrue(third.replayed)

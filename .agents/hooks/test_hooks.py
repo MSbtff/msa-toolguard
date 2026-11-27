@@ -11,8 +11,8 @@ from unittest import mock
 HOOKS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(HOOKS_DIR))
 
-import core_purity_guard  # noqa: E402
-import stop_contract_verify  # noqa: E402
+import core_purity_guard
+import stop_contract_verify
 
 REPO_ROOT = HOOKS_DIR.parents[1].resolve()
 
@@ -25,13 +25,11 @@ class ToolGuardHooksTest(unittest.TestCase):
         self.assertIn("Stop", config["msa-toolguard-guards"])
 
     def test_file_tools_allow_in_repo_and_deny_secrets_purity_and_external_writes(self):
-        # Secrets denied
         decision, _ = core_purity_guard.evaluate({
             "toolCall": {"name": "read_file", "args": {"Path": str(REPO_ROOT / ".env")}}
         })
         self.assertEqual("deny", decision)
 
-        # toolguard-core runtime dependency denied
         decision, _ = core_purity_guard.evaluate({
             "toolCall": {
                 "name": "edit_file",
@@ -43,7 +41,6 @@ class ToolGuardHooksTest(unittest.TestCase):
         })
         self.assertEqual("deny", decision)
 
-        # toolguard-core test dependency allowed inside repo
         decision, _ = core_purity_guard.evaluate({
             "toolCall": {
                 "name": "edit_file",
@@ -55,13 +52,11 @@ class ToolGuardHooksTest(unittest.TestCase):
         })
         self.assertEqual("allow", decision)
 
-        # Normal in-repo read/edit allowed automatically
         decision, _ = core_purity_guard.evaluate({
             "toolCall": {"name": "edit_file", "args": {"Path": str(REPO_ROOT / "README.md"), "Replacement": "ok"}}
         })
         self.assertEqual("allow", decision)
 
-        # Out-of-repo reads and writes both delegate to user confirmation ("ask")
         external_path = str(REPO_ROOT.parent / "ErpMSA/README.md")
         decision, _ = core_purity_guard.evaluate({
             "toolCall": {"name": "edit_file", "args": {"Path": external_path, "Replacement": "x"}}
