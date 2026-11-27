@@ -50,6 +50,7 @@ from .opencode import (
 )
 from .policy import ToolPolicy, allowed_keys_rule, forbid_keys_rule, integer_range_rule
 from .session import ToolSession
+from .sqlite_store import SQLiteToolExecutionStore
 from .store import InMemoryToolExecutionStore, ToolExecutionStore
 from .verifier import (
     OutputVerifier,
@@ -90,6 +91,7 @@ __all__ = [
     "LoopbackMcpServer",
     "OpenCodeRunnerError",
     "OutputVerifier",
+    "SQLiteToolExecutionStore",
     "ToolExecutionEvent",
     "ToolExecutionOutcome",
     "ToolExecutionStatus",

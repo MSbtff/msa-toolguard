@@ -223,7 +223,7 @@ class RedisToolExecutionStoreIntegrationTest {
             .maxCalls(16)
             .build();
 
-        int concurrency = 8;
+        int concurrency = 16;
         CyclicBarrier barrier = new CyclicBarrier(concurrency);
         try (ExecutorService pool = Executors.newFixedThreadPool(concurrency)) {
             List<Future<ToolExecutionOutcome>> futures = new ArrayList<>();

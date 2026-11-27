@@ -31,6 +31,9 @@ class StoreSafetyUnitTest {
         assertTrue(JdbcToolExecutionStore.isLockTimeout(new SQLException("lock not available", "55P03")));
         assertTrue(JdbcToolExecutionStore.isLockTimeout(new SQLException("h2 timeout", "HYT00")));
         assertTrue(JdbcToolExecutionStore.isLockTimeout(new SQLException("lock wait timeout", "41000", 1205)));
+        assertTrue(JdbcToolExecutionStore.isLockTimeout(new SQLException("statement timeout", "70100", 1969)));
+        assertTrue(JdbcToolExecutionStore.isLockTimeout(new SQLException("query timeout", "HY000", 3024)));
+        assertTrue(JdbcToolExecutionStore.isLockTimeout(new SQLException("lock nowait", "HY000", 3572)));
         assertFalse(JdbcToolExecutionStore.isLockTimeout(new SQLException("syntax error", "42601")));
     }
 
